@@ -12,6 +12,35 @@ interface WhatsAppWebhookData {
   hora_agendamento: string
 }
 
+function normalizeTimeFormat(time: string): string | null {
+  if (!time) return null
+
+  // Remove extra whitespace
+  time = time.trim()
+
+  // If already in HH:MM format, return as is
+  if (/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(time)) {
+    return time
+  }
+
+  // If in HH:MM:SS format, remove seconds
+  if (/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/.test(time)) {
+    return time.substring(0, 5)
+  }
+
+  // If in H:MM format (single digit hour), add leading zero
+  if (/^[0-9]:[0-5][0-9]$/.test(time)) {
+    return `0${time}`
+  }
+
+  // If in H:MM:SS format, normalize
+  if (/^[0-9]:[0-5][0-9]:[0-5][0-9]$/.test(time)) {
+    return `0${time.substring(0, 4)}`
+  }
+
+  return null
+}
+
 export async function POST(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams
@@ -46,10 +75,20 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/
-    if (!timeRegex.test(data.hora_agendamento)) {
-      return NextResponse.json({ error: "Invalid time format. Use HH:MM format (e.g., 14:00)" }, { status: 400 })
+    const normalizedTime = normalizeTimeFormat(data.hora_agendamento)
+
+    if (!normalizedTime) {
+      return NextResponse.json(
+        {
+          error: "Invalid time format. Use HH:MM format (e.g., 14:00)",
+          received: data.hora_agendamento,
+          hint: "Accepted formats: HH:MM, HH:MM:SS, H:MM",
+        },
+        { status: 400 },
+      )
     }
+
+    data.hora_agendamento = normalizedTime
 
     const [hours] = data.hora_agendamento.split(":").map(Number)
     if (hours < 8 || hours >= 20) {
