@@ -14,7 +14,27 @@ interface WhatsAppWebhookData {
 
 export async function POST(request: NextRequest) {
   try {
-    const data: WhatsAppWebhookData = await request.json()
+    const searchParams = request.nextUrl.searchParams
+    let data: WhatsAppWebhookData
+
+    // Try to get data from query parameters first (for n8n)
+    if (searchParams.has("cliente_nome") || searchParams.has("Nome completo do cliente")) {
+      data = {
+        cliente_nome: searchParams.get("cliente_nome") || searchParams.get("Nome completo do cliente") || "",
+        cliente_telefone: searchParams.get("cliente_telefone") || searchParams.get("Telefone com DDD") || "",
+        funcionario_nome:
+          searchParams.get("funcionario_nome") || searchParams.get("Nome do funcionário (busca parcial)") || undefined,
+        funcionario_id: searchParams.get("funcionario_id") || searchParams.get("ID do funcionário (UUID)") || undefined,
+        servico_nome:
+          searchParams.get("servico_nome") || searchParams.get("Nome do serviço (busca parcial)") || undefined,
+        servico_id: searchParams.get("servico_id") || searchParams.get("ID do serviço (UUID)") || undefined,
+        data_agendamento: searchParams.get("data_agendamento") || searchParams.get("Formato: YYYY-MM-DD") || "",
+        hora_agendamento: searchParams.get("hora_agendamento") || searchParams.get("Formato: HH:MM") || "",
+      }
+    } else {
+      // Fall back to JSON body
+      data = await request.json()
+    }
 
     console.log("[v0] Received WhatsApp webhook data:", data)
 
@@ -22,6 +42,19 @@ export async function POST(request: NextRequest) {
     if (!data.cliente_nome || !data.cliente_telefone || !data.data_agendamento || !data.hora_agendamento) {
       return NextResponse.json(
         { error: "Missing required fields: cliente_nome, cliente_telefone, data_agendamento, hora_agendamento" },
+        { status: 400 },
+      )
+    }
+
+    const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/
+    if (!timeRegex.test(data.hora_agendamento)) {
+      return NextResponse.json({ error: "Invalid time format. Use HH:MM format (e.g., 14:00)" }, { status: 400 })
+    }
+
+    const [hours] = data.hora_agendamento.split(":").map(Number)
+    if (hours < 8 || hours >= 20) {
+      return NextResponse.json(
+        { error: "Horário fora do expediente. Horário de funcionamento: 08:00 às 20:00" },
         { status: 400 },
       )
     }
@@ -84,6 +117,43 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Could not determine funcionario or servico" }, { status: 400 })
     }
 
+    const dayOfWeek = new Date(data.data_agendamento).toLocaleDateString("pt-BR", { weekday: "long" })
+    const { data: blockedTimes } = await supabase
+      .from("disponibilidades")
+      .select("*")
+      .eq("funcionario_id", funcionarioId)
+      .eq("dia_semana", dayOfWeek)
+
+    if (blockedTimes && blockedTimes.length > 0) {
+      const requestedTime = data.hora_agendamento
+      const isBlocked = blockedTimes.some((blocked) => {
+        return requestedTime >= blocked.hora_inicio && requestedTime < blocked.hora_fim
+      })
+
+      if (isBlocked) {
+        return NextResponse.json(
+          { error: "Funcionário não está disponível neste horário (horário bloqueado)" },
+          { status: 409 },
+        )
+      }
+    }
+
+    const { data: existingAppointment } = await supabase
+      .from("agendamentos")
+      .select("*")
+      .eq("funcionario_id", funcionarioId)
+      .eq("data_agendamento", data.data_agendamento)
+      .eq("hora_agendamento", data.hora_agendamento)
+      .neq("status", "cancelado")
+      .single()
+
+    if (existingAppointment) {
+      return NextResponse.json(
+        { error: "Já existe um agendamento para este funcionário neste horário" },
+        { status: 409 },
+      )
+    }
+
     // Create the appointment
     const { data: appointment, error } = await supabase
       .from("agendamentos")
@@ -121,13 +191,22 @@ export async function POST(request: NextRequest) {
 }
 
 // GET endpoint for testing
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const searchParams = request.nextUrl.searchParams
+  const params = Object.fromEntries(searchParams.entries())
+
   return NextResponse.json({
     message: "WhatsApp Webhook Endpoint",
     usage: "POST to this endpoint with appointment data from n8n",
+    methods: {
+      query_params: "Send data as URL query parameters (for n8n)",
+      json_body: "Send data as JSON in request body",
+    },
     required_fields: ["cliente_nome", "cliente_telefone", "data_agendamento", "hora_agendamento"],
     optional_fields: ["funcionario_nome", "funcionario_id", "servico_nome", "servico_id"],
-    example: {
+    example_query_params:
+      "?cliente_nome=João Silva&cliente_telefone=(11) 99999-9999&data_agendamento=2025-01-20&hora_agendamento=14:00",
+    example_json_body: {
       cliente_nome: "João Silva",
       cliente_telefone: "(11) 99999-9999",
       funcionario_nome: "Maria",
@@ -135,5 +214,6 @@ export async function GET() {
       data_agendamento: "2025-01-20",
       hora_agendamento: "14:00",
     },
+    received_params: params,
   })
 }
