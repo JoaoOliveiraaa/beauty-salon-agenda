@@ -46,6 +46,12 @@ export async function POST(request: NextRequest) {
     const searchParams = request.nextUrl.searchParams
     let data: WhatsAppWebhookData
 
+    console.log("[v0] === WEBHOOK REQUEST DEBUG ===")
+    console.log("[v0] Method:", request.method)
+    console.log("[v0] URL:", request.url)
+    console.log("[v0] Headers:", Object.fromEntries(request.headers.entries()))
+    console.log("[v0] Query Params:", Object.fromEntries(searchParams.entries()))
+
     // Try to get data from query parameters first (for n8n)
     if (searchParams.has("cliente_nome") || searchParams.has("Nome completo do cliente")) {
       data = {
@@ -60,17 +66,59 @@ export async function POST(request: NextRequest) {
         data_agendamento: searchParams.get("data_agendamento") || searchParams.get("Formato: YYYY-MM-DD") || "",
         hora_agendamento: searchParams.get("hora_agendamento") || searchParams.get("Formato: HH:MM") || "",
       }
+      console.log("[v0] Data source: Query Parameters")
     } else {
       // Fall back to JSON body
-      data = await request.json()
+      const rawBody = await request.text()
+      console.log("[v0] Raw body:", rawBody)
+
+      try {
+        data = JSON.parse(rawBody)
+        console.log("[v0] Data source: JSON Body")
+      } catch (parseError) {
+        console.error("[v0] JSON parse error:", parseError)
+        return NextResponse.json(
+          {
+            error: "Invalid JSON in request body",
+            received: rawBody,
+            hint: "Make sure you're sending valid JSON with Content-Type: application/json",
+          },
+          { status: 400 },
+        )
+      }
     }
 
-    console.log("[v0] Received WhatsApp webhook data:", data)
+    console.log("[v0] Parsed data:", JSON.stringify(data, null, 2))
+
+    const hasClienteNome = data.cliente_nome && data.cliente_nome.trim() !== "" && !data.cliente_nome.includes("{{")
+    const hasClienteTelefone =
+      data.cliente_telefone && data.cliente_telefone.trim() !== "" && !data.cliente_telefone.includes("{{")
+    const hasDataAgendamento =
+      data.data_agendamento && data.data_agendamento.trim() !== "" && !data.data_agendamento.includes("{{")
+    const hasHoraAgendamento =
+      data.hora_agendamento && data.hora_agendamento.trim() !== "" && !data.hora_agendamento.includes("{{")
+
+    console.log("[v0] Field validation:", {
+      hasClienteNome,
+      hasClienteTelefone,
+      hasDataAgendamento,
+      hasHoraAgendamento,
+    })
 
     // Validate required fields
-    if (!data.cliente_nome || !data.cliente_telefone || !data.data_agendamento || !data.hora_agendamento) {
+    if (!hasClienteNome || !hasClienteTelefone || !hasDataAgendamento || !hasHoraAgendamento) {
+      const missingFields = []
+      if (!hasClienteNome) missingFields.push("cliente_nome")
+      if (!hasClienteTelefone) missingFields.push("cliente_telefone")
+      if (!hasDataAgendamento) missingFields.push("data_agendamento")
+      if (!hasHoraAgendamento) missingFields.push("hora_agendamento")
+
       return NextResponse.json(
-        { error: "Missing required fields: cliente_nome, cliente_telefone, data_agendamento, hora_agendamento" },
+        {
+          error: `Missing or invalid required fields: ${missingFields.join(", ")}`,
+          received: data,
+          hint: "Check if n8n expressions like {{ $json.nome }} are being evaluated correctly. They should contain actual values, not the expression syntax.",
+        },
         { status: 400 },
       )
     }
@@ -100,22 +148,6 @@ export async function POST(request: NextRequest) {
 
     const supabase = await getSupabaseServerClient()
 
-    // If funcionario_nome is provided but not funcionario_id, look it up
-    let funcionarioId = data.funcionario_id
-    if (!funcionarioId && data.funcionario_nome) {
-      const { data: funcionario } = await supabase
-        .from("users")
-        .select("id")
-        .eq("tipo_usuario", "funcionario")
-        .ilike("nome", `%${data.funcionario_nome}%`)
-        .single()
-
-      if (funcionario) {
-        funcionarioId = funcionario.id
-      }
-    }
-
-    // If servico_nome is provided but not servico_id, look it up
     let servicoId = data.servico_id
     if (!servicoId && data.servico_nome) {
       const { data: servico } = await supabase
@@ -129,26 +161,88 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // If no funcionario specified, get the first available one
-    if (!funcionarioId) {
-      const { data: firstStaff } = await supabase
-        .from("users")
-        .select("id")
-        .eq("tipo_usuario", "funcionario")
-        .limit(1)
-        .single()
-
-      if (firstStaff) {
-        funcionarioId = firstStaff.id
-      }
-    }
-
     // If no servico specified, get the first one
     if (!servicoId) {
       const { data: firstService } = await supabase.from("servicos").select("id").limit(1).single()
 
       if (firstService) {
         servicoId = firstService.id
+      }
+    }
+
+    let funcionarioId = data.funcionario_id
+
+    // If funcionario_nome is provided but not funcionario_id, look it up
+    if (!funcionarioId && data.funcionario_nome) {
+      const { data: employeeServices } = await supabase
+        .from("funcionario_servicos")
+        .select("funcionario_id")
+        .eq("servico_id", servicoId)
+
+      const employeeIds = employeeServices?.map((es) => es.funcionario_id) || []
+
+      if (employeeIds.length > 0) {
+        const { data: funcionario } = await supabase
+          .from("users")
+          .select("id")
+          .eq("tipo_usuario", "funcionario")
+          .in("id", employeeIds)
+          .ilike("nome", `%${data.funcionario_nome}%`)
+          .single()
+
+        if (funcionario) {
+          funcionarioId = funcionario.id
+        }
+      }
+    }
+
+    if (funcionarioId && servicoId) {
+      const { data: canPerformService } = await supabase
+        .from("funcionario_servicos")
+        .select("*")
+        .eq("funcionario_id", funcionarioId)
+        .eq("servico_id", servicoId)
+        .single()
+
+      if (!canPerformService) {
+        return NextResponse.json(
+          {
+            error: "O funcionário selecionado não está habilitado para realizar este serviço",
+            hint: "Configure os serviços do funcionário no painel admin em Funcionários > Gerenciar Serviços",
+          },
+          { status: 400 },
+        )
+      }
+    }
+
+    if (!funcionarioId && servicoId) {
+      const { data: employeeServices } = await supabase
+        .from("funcionario_servicos")
+        .select("funcionario_id")
+        .eq("servico_id", servicoId)
+
+      const employeeIds = employeeServices?.map((es) => es.funcionario_id) || []
+
+      if (employeeIds.length > 0) {
+        const { data: firstStaff } = await supabase
+          .from("users")
+          .select("id")
+          .eq("tipo_usuario", "funcionario")
+          .in("id", employeeIds)
+          .limit(1)
+          .single()
+
+        if (firstStaff) {
+          funcionarioId = firstStaff.id
+        }
+      } else {
+        return NextResponse.json(
+          {
+            error: "Nenhum funcionário está habilitado para realizar este serviço",
+            hint: "Configure os serviços dos funcionários no painel admin",
+          },
+          { status: 400 },
+        )
       }
     }
 
@@ -214,6 +308,7 @@ export async function POST(request: NextRequest) {
     }
 
     console.log("[v0] Appointment created successfully:", appointment)
+    console.log("[v0] === END WEBHOOK REQUEST ===")
 
     return NextResponse.json(
       {

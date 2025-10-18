@@ -40,3 +40,10 @@ export interface Appointment {
   funcionario?: User
   servico?: Service
 }
+
+export interface EmployeeService {
+  id: string
+  funcionario_id: string
+  servico_id: string
+  criado_em: string
+}

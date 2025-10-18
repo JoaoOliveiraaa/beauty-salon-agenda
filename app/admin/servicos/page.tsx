@@ -97,26 +97,28 @@ export default function ServicosPage() {
   }
 
   return (
-    <div className="p-8 space-y-6">
+    <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-balance">Serviços</h1>
-          <p className="text-muted-foreground mt-1">Gerencie os serviços oferecidos</p>
+          <h1 className="text-2xl font-semibold text-foreground">Serviços</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">Gerencie os serviços oferecidos</p>
         </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
-            <Button onClick={openCreateDialog}>
+            <Button onClick={openCreateDialog} size="sm">
               <Plus className="w-4 h-4 mr-2" />
               Novo Serviço
             </Button>
           </DialogTrigger>
           <DialogContent className="bg-background">
             <DialogHeader>
-              <DialogTitle>{editingService ? "Editar Serviço" : "Novo Serviço"}</DialogTitle>
+              <DialogTitle className="text-lg">{editingService ? "Editar Serviço" : "Novo Serviço"}</DialogTitle>
             </DialogHeader>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="nome_servico">Nome do Serviço</Label>
+                <Label htmlFor="nome_servico" className="text-sm">
+                  Nome do Serviço
+                </Label>
                 <Input
                   id="nome_servico"
                   value={formData.nome_servico}
@@ -126,17 +128,22 @@ export default function ServicosPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="descricao">Descrição</Label>
+                <Label htmlFor="descricao" className="text-sm">
+                  Descrição
+                </Label>
                 <Textarea
                   id="descricao"
                   value={formData.descricao}
                   onChange={(e) => setFormData({ ...formData, descricao: e.target.value })}
                   className="bg-background"
+                  rows={3}
                 />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="preco">Preço (R$)</Label>
+                  <Label htmlFor="preco" className="text-sm">
+                    Preço (R$)
+                  </Label>
                   <Input
                     id="preco"
                     type="number"
@@ -148,7 +155,9 @@ export default function ServicosPage() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="duracao_minutos">Duração (min)</Label>
+                  <Label htmlFor="duracao_minutos" className="text-sm">
+                    Duração (min)
+                  </Label>
                   <Input
                     id="duracao_minutos"
                     type="number"
@@ -159,42 +168,48 @@ export default function ServicosPage() {
                   />
                 </div>
               </div>
-              <div className="flex justify-end gap-2">
-                <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+              <div className="flex justify-end gap-2 pt-2">
+                <Button type="button" variant="outline" onClick={() => setDialogOpen(false)} size="sm">
                   Cancelar
                 </Button>
-                <Button type="submit">{editingService ? "Salvar" : "Criar"}</Button>
+                <Button type="submit" size="sm">
+                  {editingService ? "Salvar" : "Criar"}
+                </Button>
               </div>
             </form>
           </DialogContent>
         </Dialog>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {services.map((service) => (
-          <Card key={service.id} className="shadow-sm">
-            <CardHeader>
-              <div className="flex items-start justify-between">
-                <CardTitle className="text-lg text-balance">{service.nome_servico}</CardTitle>
-                <div className="flex gap-1">
-                  <Button size="sm" variant="ghost" onClick={() => openEditDialog(service)}>
-                    <Pencil className="w-4 h-4" />
+          <Card key={service.id} className="border-border hover:shadow-sm transition-shadow">
+            <CardHeader className="pb-3">
+              <div className="flex items-start justify-between gap-2">
+                <CardTitle className="text-base font-semibold text-balance leading-snug">
+                  {service.nome_servico}
+                </CardTitle>
+                <div className="flex gap-1 flex-shrink-0">
+                  <Button size="sm" variant="ghost" onClick={() => openEditDialog(service)} className="h-7 w-7 p-0">
+                    <Pencil className="w-3.5 h-3.5" />
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={() => handleDelete(service.id)}>
-                    <Trash2 className="w-4 h-4 text-destructive" />
+                  <Button size="sm" variant="ghost" onClick={() => handleDelete(service.id)} className="h-7 w-7 p-0">
+                    <Trash2 className="w-3.5 h-3.5 text-destructive" />
                   </Button>
                 </div>
               </div>
-              {service.descricao && <p className="text-sm text-muted-foreground mt-2">{service.descricao}</p>}
+              {service.descricao && (
+                <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">{service.descricao}</p>
+              )}
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="pt-0">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-sm">
+                <div className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
                   <DollarSign className="w-4 h-4 text-primary" />
-                  <span className="font-semibold">R$ {service.preco.toFixed(2)}</span>
+                  <span>R$ {service.preco.toFixed(2)}</span>
                 </div>
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Clock className="w-4 h-4" />
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Clock className="w-3.5 h-3.5" />
                   <span>{service.duracao_minutos} min</span>
                 </div>
               </div>

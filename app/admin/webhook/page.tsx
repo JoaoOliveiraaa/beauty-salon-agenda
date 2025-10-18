@@ -4,7 +4,7 @@ import { Webhook } from "lucide-react"
 import { CopyButton } from "@/components/copy-button"
 
 export default function WebhookPage() {
-  const webhookUrl = `${process.env.NEXT_PUBLIC_SITE_URL || "https://beauty-salon-agenda.vercel.app"}/api/webhook/whatsapp`
+  const webhookUrl = `${process.env.NEXT_PUBLIC_SITE_URL || "https://your-domain.vercel.app"}/api/webhook/whatsapp`
 
   const examplePayload = {
     cliente_nome: "João Silva",

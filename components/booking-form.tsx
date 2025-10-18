@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -25,10 +25,45 @@ export function BookingForm({ staff, services, userType }: BookingFormProps) {
   const [dataAgendamento, setDataAgendamento] = useState("")
   const [horaAgendamento, setHoraAgendamento] = useState("")
   const [availableTimes, setAvailableTimes] = useState<string[]>([])
+  const [filteredStaff, setFilteredStaff] = useState(staff)
   const [loading, setLoading] = useState(false)
   const [success, setSuccess] = useState(false)
   const router = useRouter()
   const supabase = getSupabaseBrowserClient()
+
+  useEffect(() => {
+    const filterStaffByService = async () => {
+      if (!servicoId) {
+        setFilteredStaff(staff)
+        return
+      }
+
+      const { data: employeeServices } = await supabase
+        .from("funcionario_servicos")
+        .select("funcionario_id")
+        .eq("servico_id", servicoId)
+
+      if (employeeServices && employeeServices.length > 0) {
+        const employeeIds = employeeServices.map((es) => es.funcionario_id)
+        const filtered = staff.filter((person) => employeeIds.includes(person.id))
+        setFilteredStaff(filtered)
+
+        // Reset funcionario if current selection doesn't offer this service
+        if (funcionarioId && !employeeIds.includes(funcionarioId)) {
+          setFuncionarioId("")
+          setHoraAgendamento("")
+          setAvailableTimes([])
+        }
+      } else {
+        setFilteredStaff([])
+        setFuncionarioId("")
+        setHoraAgendamento("")
+        setAvailableTimes([])
+      }
+    }
+
+    filterStaffByService()
+  }, [servicoId, staff, supabase, funcionarioId])
 
   const loadAvailableTimes = async () => {
     if (!funcionarioId || !dataAgendamento) return
@@ -148,11 +183,12 @@ export function BookingForm({ staff, services, userType }: BookingFormProps) {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="space-y-2">
-          <Label>Funcionário</Label>
+          <Label>Serviço</Label>
           <Select
-            value={funcionarioId}
+            value={servicoId}
             onValueChange={(value) => {
-              setFuncionarioId(value)
+              setServicoId(value)
+              // Reset dependent fields when service changes
               setHoraAgendamento("")
               setAvailableTimes([])
             }}
@@ -161,24 +197,40 @@ export function BookingForm({ staff, services, userType }: BookingFormProps) {
               <SelectValue placeholder="Selecione" />
             </SelectTrigger>
             <SelectContent>
-              {staff.map((person) => (
-                <SelectItem key={person.id} value={person.id}>
-                  {person.nome}
+              {services.map((service) => (
+                <SelectItem key={service.id} value={service.id}>
+                  {service.nome_servico}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
         </div>
         <div className="space-y-2">
-          <Label>Serviço</Label>
-          <Select value={servicoId} onValueChange={setServicoId}>
+          <Label>Funcionário</Label>
+          <Select
+            value={funcionarioId}
+            onValueChange={(value) => {
+              setFuncionarioId(value)
+              setHoraAgendamento("")
+              setAvailableTimes([])
+            }}
+            disabled={!servicoId}
+          >
             <SelectTrigger className="bg-background">
-              <SelectValue placeholder="Selecione" />
+              <SelectValue
+                placeholder={
+                  !servicoId
+                    ? "Selecione um serviço primeiro"
+                    : filteredStaff.length === 0
+                      ? "Nenhum funcionário disponível"
+                      : "Selecione"
+                }
+              />
             </SelectTrigger>
             <SelectContent>
-              {services.map((service) => (
-                <SelectItem key={service.id} value={service.id}>
-                  {service.nome_servico}
+              {filteredStaff.map((person) => (
+                <SelectItem key={person.id} value={person.id}>
+                  {person.nome}
                 </SelectItem>
               ))}
             </SelectContent>
