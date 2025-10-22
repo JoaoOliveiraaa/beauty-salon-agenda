@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { LayoutDashboard, Calendar, Users, Briefcase, Clock, Plus, Webhook } from "lucide-react"
+import { LayoutDashboard, Calendar, Users, Briefcase, Clock, Plus, Webhook, TrendingDown } from "lucide-react"
 import { LogoutButton } from "./logout-button"
 
 const menuItems = [
@@ -13,6 +13,7 @@ const menuItems = [
   { href: "/admin/funcionarios", label: "Funcionários", icon: Users },
   { href: "/admin/servicos", label: "Serviços", icon: Briefcase },
   { href: "/admin/disponibilidades", label: "Disponibilidades", icon: Clock },
+  { href: "/admin/despesas", label: "Despesas", icon: TrendingDown },
   { href: "/admin/webhook", label: "Integração WhatsApp", icon: Webhook },
 ]
 

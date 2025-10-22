@@ -7,6 +7,7 @@ import { ExportCSVButton } from "@/components/export-csv-button"
 import { EmployeeRevenueTable } from "@/components/employee-revenue-table"
 import { ServicePerformanceTable } from "@/components/service-performance-table"
 import { BusinessMetricsCards } from "@/components/business-metrics-cards"
+import { ProfitAnalysisDashboard } from "@/components/profit-analysis-dashboard"
 
 async function getDashboardStats() {
   const supabase = await getSupabaseServerClient()
@@ -167,6 +168,8 @@ export default async function AdminDashboard() {
       </div>
 
       <BusinessMetricsCards />
+
+      <ProfitAnalysisDashboard />
 
       <RevenueChart data={stats.revenueByDay} />
 
