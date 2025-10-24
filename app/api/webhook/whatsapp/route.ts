@@ -19,30 +19,11 @@ function isValidUUID(uuid: string): boolean {
 
 function normalizeTimeFormat(time: string): string | null {
   if (!time) return null
-
-  // Remove extra whitespace
   time = time.trim()
-
-  // If already in HH:MM format, return as is
-  if (/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(time)) {
-    return time
-  }
-
-  // If in HH:MM:SS format, remove seconds
-  if (/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/.test(time)) {
-    return time.substring(0, 5)
-  }
-
-  // If in H:MM format (single digit hour), add leading zero
-  if (/^[0-9]:[0-5][0-9]$/.test(time)) {
-    return `0${time}`
-  }
-
-  // If in H:MM:SS format, normalize
-  if (/^[0-9]:[0-5][0-9]:[0-5][0-9]$/.test(time)) {
-    return `0${time.substring(0, 4)}`
-  }
-
+  if (/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(time)) return time
+  if (/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/.test(time)) return time.substring(0, 5)
+  if (/^[0-9]:[0-5][0-9]$/.test(time)) return `0${time}`
+  if (/^[0-9]:[0-5][0-9]:[0-5][0-9]$/.test(time)) return `0${time.substring(0, 4)}`
   return null
 }
 
@@ -52,12 +33,7 @@ export async function POST(request: NextRequest) {
     let data: WhatsAppWebhookData
 
     console.log("[v0] === WEBHOOK REQUEST DEBUG ===")
-    console.log("[v0] Method:", request.method)
-    console.log("[v0] URL:", request.url)
-    console.log("[v0] Headers:", Object.fromEntries(request.headers.entries()))
-    console.log("[v0] Query Params:", Object.fromEntries(searchParams.entries()))
 
-    // Try to get data from query parameters first (for n8n)
     if (searchParams.has("cliente_nome") || searchParams.has("Nome completo do cliente")) {
       data = {
         cliente_nome: searchParams.get("cliente_nome") || searchParams.get("Nome completo do cliente") || "",
@@ -73,23 +49,13 @@ export async function POST(request: NextRequest) {
       }
       console.log("[v0] Data source: Query Parameters")
     } else {
-      // Fall back to JSON body
       const rawBody = await request.text()
       console.log("[v0] Raw body:", rawBody)
-
       try {
         data = JSON.parse(rawBody)
         console.log("[v0] Data source: JSON Body")
       } catch (parseError) {
-        console.error("[v0] JSON parse error:", parseError)
-        return NextResponse.json(
-          {
-            error: "Invalid JSON in request body",
-            received: rawBody,
-            hint: "Make sure you're sending valid JSON with Content-Type: application/json",
-          },
-          { status: 400 },
-        )
+        return NextResponse.json({ error: "Invalid JSON in request body", received: rawBody }, { status: 400 })
       }
     }
 
@@ -103,62 +69,50 @@ export async function POST(request: NextRequest) {
     const hasHoraAgendamento =
       data.hora_agendamento && data.hora_agendamento.trim() !== "" && !data.hora_agendamento.includes("{{")
 
-    console.log("[v0] Field validation:", {
-      hasClienteNome,
-      hasClienteTelefone,
-      hasDataAgendamento,
-      hasHoraAgendamento,
-    })
-
-    // Validate required fields
     if (!hasClienteNome || !hasClienteTelefone || !hasDataAgendamento || !hasHoraAgendamento) {
       const missingFields = []
       if (!hasClienteNome) missingFields.push("cliente_nome")
       if (!hasClienteTelefone) missingFields.push("cliente_telefone")
       if (!hasDataAgendamento) missingFields.push("data_agendamento")
       if (!hasHoraAgendamento) missingFields.push("hora_agendamento")
-
       return NextResponse.json(
-        {
-          error: `Missing or invalid required fields: ${missingFields.join(", ")}`,
-          received: data,
-          hint: "Check if n8n expressions like {{ $json.nome }} are being evaluated correctly. They should contain actual values, not the expression syntax.",
-        },
+        { error: `Missing required fields: ${missingFields.join(", ")}`, received: data },
         { status: 400 },
       )
     }
 
     const normalizedTime = normalizeTimeFormat(data.hora_agendamento)
-
     if (!normalizedTime) {
       return NextResponse.json(
-        {
-          error: "Invalid time format. Use HH:MM format (e.g., 14:00)",
-          received: data.hora_agendamento,
-          hint: "Accepted formats: HH:MM, HH:MM:SS, H:MM",
-        },
+        { error: "Invalid time format. Use HH:MM", received: data.hora_agendamento },
         { status: 400 },
       )
     }
-
     data.hora_agendamento = normalizedTime
 
     const [hours] = data.hora_agendamento.split(":").map(Number)
     if (hours < 8 || hours >= 20) {
-      return NextResponse.json(
-        { error: "Horário fora do expediente. Horário de funcionamento: 08:00 às 20:00" },
-        { status: 400 },
-      )
+      return NextResponse.json({ error: "Horário fora do expediente (08:00-20:00)" }, { status: 400 })
     }
 
     const supabase = await getSupabaseServerClient()
 
     let servicoId = data.servico_id
 
-    // Validate UUID format if provided
-    if (servicoId && !isValidUUID(servicoId)) {
-      console.log("[v0] Invalid servico_id UUID format:", servicoId)
-      servicoId = undefined // Will try to find by name instead
+    if (servicoId) {
+      if (!isValidUUID(servicoId)) {
+        console.log("[v0] Invalid servico_id UUID, will search by name instead:", servicoId)
+        servicoId = undefined
+      } else {
+        console.log("[v0] Valid servico_id UUID:", servicoId)
+        // Verify the service exists
+        const { data: serviceExists } = await supabase.from("servicos").select("id").eq("id", servicoId).single()
+
+        if (!serviceExists) {
+          console.log("[v0] Service UUID not found in database:", servicoId)
+          servicoId = undefined
+        }
+      }
     }
 
     if (!servicoId && data.servico_nome) {
@@ -170,21 +124,16 @@ export async function POST(request: NextRequest) {
         .limit(1)
         .single()
 
-      if (error) {
-        console.log("[v0] Error finding servico:", error)
-      }
-
+      if (error) console.log("[v0] Error finding servico:", error)
       if (servico) {
         servicoId = servico.id
         console.log("[v0] Found servico_id:", servicoId)
       }
     }
 
-    // If no servico specified, get the first one
     if (!servicoId) {
       console.log("[v0] No servico specified, getting first available")
       const { data: firstService } = await supabase.from("servicos").select("id").limit(1).single()
-
       if (firstService) {
         servicoId = firstService.id
         console.log("[v0] Using first servico_id:", servicoId)
@@ -192,28 +141,35 @@ export async function POST(request: NextRequest) {
     }
 
     if (!servicoId) {
-      return NextResponse.json(
-        {
-          error: "Nenhum serviço encontrado",
-          hint: "Cadastre serviços no painel admin ou forneça um servico_id válido",
-        },
-        { status: 400 },
-      )
+      return NextResponse.json({ error: "Nenhum serviço encontrado" }, { status: 400 })
     }
 
     let funcionarioId = data.funcionario_id
 
-    // Validate UUID format if provided
-    if (funcionarioId && !isValidUUID(funcionarioId)) {
-      console.log("[v0] Invalid funcionario_id UUID format:", funcionarioId)
-      funcionarioId = undefined // Will try to find by name instead
+    if (funcionarioId) {
+      if (!isValidUUID(funcionarioId)) {
+        console.log("[v0] Invalid funcionario_id UUID, will search by name instead:", funcionarioId)
+        funcionarioId = undefined
+      } else {
+        console.log("[v0] Valid funcionario_id UUID:", funcionarioId)
+        // Verify the employee exists
+        const { data: employeeExists } = await supabase
+          .from("users")
+          .select("id")
+          .eq("id", funcionarioId)
+          .eq("tipo_usuario", "funcionario")
+          .single()
+
+        if (!employeeExists) {
+          console.log("[v0] Employee UUID not found in database:", funcionarioId)
+          funcionarioId = undefined
+        }
+      }
     }
 
-    // If funcionario_nome is provided but not funcionario_id, look it up
     if (!funcionarioId && data.funcionario_nome) {
       console.log("[v0] Looking up funcionario by name:", data.funcionario_nome)
 
-      // First get employees who can perform this service
       const { data: employeeServices } = await supabase
         .from("funcionario_servicos")
         .select("funcionario_id")
@@ -232,10 +188,7 @@ export async function POST(request: NextRequest) {
           .limit(1)
           .single()
 
-        if (error) {
-          console.log("[v0] Error finding funcionario:", error)
-        }
-
+        if (error) console.log("[v0] Error finding funcionario:", error)
         if (funcionario) {
           funcionarioId = funcionario.id
           console.log("[v0] Found funcionario_id:", funcionarioId)
@@ -255,19 +208,17 @@ export async function POST(request: NextRequest) {
       if (!canPerformService) {
         return NextResponse.json(
           {
-            error: "O funcionário selecionado não está habilitado para realizar este serviço",
+            error: "Funcionário não habilitado para este serviço",
             funcionario_id: funcionarioId,
             servico_id: servicoId,
-            hint: "Configure os serviços do funcionário no painel admin em Funcionários > Gerenciar Serviços",
           },
           { status: 400 },
         )
       }
     }
 
-    // If no funcionario specified, find one who can perform the service
     if (!funcionarioId && servicoId) {
-      console.log("[v0] No funcionario specified, finding one who can perform service")
+      console.log("[v0] Finding funcionario who can perform service")
       const { data: employeeServices } = await supabase
         .from("funcionario_servicos")
         .select("funcionario_id")
@@ -290,25 +241,14 @@ export async function POST(request: NextRequest) {
         }
       } else {
         return NextResponse.json(
-          {
-            error: "Nenhum funcionário está habilitado para realizar este serviço",
-            servico_id: servicoId,
-            hint: "Configure os serviços dos funcionários no painel admin",
-          },
+          { error: "Nenhum funcionário habilitado para este serviço", servico_id: servicoId },
           { status: 400 },
         )
       }
     }
 
     if (!funcionarioId || !servicoId) {
-      return NextResponse.json(
-        {
-          error: "Não foi possível determinar funcionário ou serviço",
-          funcionario_id: funcionarioId,
-          servico_id: servicoId,
-        },
-        { status: 400 },
-      )
+      return NextResponse.json({ error: "Não foi possível determinar funcionário ou serviço" }, { status: 400 })
     }
 
     const dayOfWeek = new Date(data.data_agendamento).toLocaleDateString("pt-BR", { weekday: "long" })
@@ -325,10 +265,7 @@ export async function POST(request: NextRequest) {
       })
 
       if (isBlocked) {
-        return NextResponse.json(
-          { error: "Funcionário não está disponível neste horário (horário bloqueado)" },
-          { status: 409 },
-        )
+        return NextResponse.json({ error: "Funcionário não disponível neste horário" }, { status: 409 })
       }
     }
 
@@ -342,23 +279,28 @@ export async function POST(request: NextRequest) {
       .single()
 
     if (existingAppointment) {
-      return NextResponse.json(
-        { error: "Já existe um agendamento para este funcionário neste horário" },
-        { status: 409 },
-      )
+      return NextResponse.json({ error: "Horário já agendado" }, { status: 409 })
     }
 
-    // Create the appointment
+    console.log("[v0] Creating appointment with:", {
+      funcionario_id: funcionarioId,
+      servico_id: servicoId,
+      cliente_nome: data.cliente_nome,
+      data: data.data_agendamento,
+      hora: data.hora_agendamento,
+    })
+
     const { data: appointment, error } = await supabase
       .from("agendamentos")
       .insert({
         cliente_nome: data.cliente_nome,
         cliente_telefone: data.cliente_telefone,
-        funcionario_id: funcionarioId, // Supabase will cast string to UUID
-        servico_id: servicoId, // Supabase will cast string to UUID
+        funcionario_id: funcionarioId,
+        servico_id: servicoId,
         data_agendamento: data.data_agendamento,
         hora_agendamento: data.hora_agendamento,
         status: "pendente",
+        pago: false,
       })
       .select()
       .single()
@@ -370,6 +312,7 @@ export async function POST(request: NextRequest) {
           error: error.message,
           details: error.details,
           hint: error.hint,
+          code: error.code,
           funcionario_id: funcionarioId,
           servico_id: servicoId,
         },
@@ -408,13 +351,23 @@ export async function GET(request: NextRequest) {
     },
     required_fields: ["cliente_nome", "cliente_telefone", "data_agendamento", "hora_agendamento"],
     optional_fields: ["funcionario_nome", "funcionario_id", "servico_nome", "servico_id"],
-    example_query_params:
-      "?cliente_nome=João Silva&cliente_telefone=(11) 99999-9999&data_agendamento=2025-01-20&hora_agendamento=14:00",
-    example_json_body: {
+    uuid_handling: {
+      note: "UUIDs can be sent as strings. The system will validate and convert them automatically.",
+      fallback: "If UUID is invalid, the system will try to find by name (funcionario_nome or servico_nome)",
+    },
+    example_with_uuids: {
+      funcionario_id: "550e8400-e29b-41d4-a716-446655440000",
+      servico_id: "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
       cliente_nome: "João Silva",
       cliente_telefone: "(11) 99999-9999",
+      data_agendamento: "2025-01-20",
+      hora_agendamento: "14:00",
+    },
+    example_with_names: {
       funcionario_nome: "Maria",
       servico_nome: "Corte",
+      cliente_nome: "João Silva",
+      cliente_telefone: "(11) 99999-9999",
       data_agendamento: "2025-01-20",
       hora_agendamento: "14:00",
     },
