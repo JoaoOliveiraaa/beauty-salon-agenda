@@ -12,6 +12,11 @@ interface WhatsAppWebhookData {
   hora_agendamento: string
 }
 
+function isValidUUID(uuid: string): boolean {
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  return uuidRegex.test(uuid)
+}
+
 function normalizeTimeFormat(time: string): string | null {
   if (!time) return null
 
@@ -149,54 +154,97 @@ export async function POST(request: NextRequest) {
     const supabase = await getSupabaseServerClient()
 
     let servicoId = data.servico_id
+
+    // Validate UUID format if provided
+    if (servicoId && !isValidUUID(servicoId)) {
+      console.log("[v0] Invalid servico_id UUID format:", servicoId)
+      servicoId = undefined // Will try to find by name instead
+    }
+
     if (!servicoId && data.servico_nome) {
-      const { data: servico } = await supabase
+      console.log("[v0] Looking up servico by name:", data.servico_nome)
+      const { data: servico, error } = await supabase
         .from("servicos")
         .select("id")
         .ilike("nome_servico", `%${data.servico_nome}%`)
+        .limit(1)
         .single()
+
+      if (error) {
+        console.log("[v0] Error finding servico:", error)
+      }
 
       if (servico) {
         servicoId = servico.id
+        console.log("[v0] Found servico_id:", servicoId)
       }
     }
 
     // If no servico specified, get the first one
     if (!servicoId) {
+      console.log("[v0] No servico specified, getting first available")
       const { data: firstService } = await supabase.from("servicos").select("id").limit(1).single()
 
       if (firstService) {
         servicoId = firstService.id
+        console.log("[v0] Using first servico_id:", servicoId)
       }
+    }
+
+    if (!servicoId) {
+      return NextResponse.json(
+        {
+          error: "Nenhum serviço encontrado",
+          hint: "Cadastre serviços no painel admin ou forneça um servico_id válido",
+        },
+        { status: 400 },
+      )
     }
 
     let funcionarioId = data.funcionario_id
 
+    // Validate UUID format if provided
+    if (funcionarioId && !isValidUUID(funcionarioId)) {
+      console.log("[v0] Invalid funcionario_id UUID format:", funcionarioId)
+      funcionarioId = undefined // Will try to find by name instead
+    }
+
     // If funcionario_nome is provided but not funcionario_id, look it up
     if (!funcionarioId && data.funcionario_nome) {
+      console.log("[v0] Looking up funcionario by name:", data.funcionario_nome)
+
+      // First get employees who can perform this service
       const { data: employeeServices } = await supabase
         .from("funcionario_servicos")
         .select("funcionario_id")
         .eq("servico_id", servicoId)
 
       const employeeIds = employeeServices?.map((es) => es.funcionario_id) || []
+      console.log("[v0] Employees who can perform service:", employeeIds)
 
       if (employeeIds.length > 0) {
-        const { data: funcionario } = await supabase
+        const { data: funcionario, error } = await supabase
           .from("users")
           .select("id")
           .eq("tipo_usuario", "funcionario")
           .in("id", employeeIds)
           .ilike("nome", `%${data.funcionario_nome}%`)
+          .limit(1)
           .single()
+
+        if (error) {
+          console.log("[v0] Error finding funcionario:", error)
+        }
 
         if (funcionario) {
           funcionarioId = funcionario.id
+          console.log("[v0] Found funcionario_id:", funcionarioId)
         }
       }
     }
 
     if (funcionarioId && servicoId) {
+      console.log("[v0] Validating funcionario can perform service")
       const { data: canPerformService } = await supabase
         .from("funcionario_servicos")
         .select("*")
@@ -208,6 +256,8 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(
           {
             error: "O funcionário selecionado não está habilitado para realizar este serviço",
+            funcionario_id: funcionarioId,
+            servico_id: servicoId,
             hint: "Configure os serviços do funcionário no painel admin em Funcionários > Gerenciar Serviços",
           },
           { status: 400 },
@@ -215,7 +265,9 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // If no funcionario specified, find one who can perform the service
     if (!funcionarioId && servicoId) {
+      console.log("[v0] No funcionario specified, finding one who can perform service")
       const { data: employeeServices } = await supabase
         .from("funcionario_servicos")
         .select("funcionario_id")
@@ -234,11 +286,13 @@ export async function POST(request: NextRequest) {
 
         if (firstStaff) {
           funcionarioId = firstStaff.id
+          console.log("[v0] Using first available funcionario_id:", funcionarioId)
         }
       } else {
         return NextResponse.json(
           {
             error: "Nenhum funcionário está habilitado para realizar este serviço",
+            servico_id: servicoId,
             hint: "Configure os serviços dos funcionários no painel admin",
           },
           { status: 400 },
@@ -247,7 +301,14 @@ export async function POST(request: NextRequest) {
     }
 
     if (!funcionarioId || !servicoId) {
-      return NextResponse.json({ error: "Could not determine funcionario or servico" }, { status: 400 })
+      return NextResponse.json(
+        {
+          error: "Não foi possível determinar funcionário ou serviço",
+          funcionario_id: funcionarioId,
+          servico_id: servicoId,
+        },
+        { status: 400 },
+      )
     }
 
     const dayOfWeek = new Date(data.data_agendamento).toLocaleDateString("pt-BR", { weekday: "long" })
@@ -293,8 +354,8 @@ export async function POST(request: NextRequest) {
       .insert({
         cliente_nome: data.cliente_nome,
         cliente_telefone: data.cliente_telefone,
-        funcionario_id: funcionarioId,
-        servico_id: servicoId,
+        funcionario_id: funcionarioId, // Supabase will cast string to UUID
+        servico_id: servicoId, // Supabase will cast string to UUID
         data_agendamento: data.data_agendamento,
         hora_agendamento: data.hora_agendamento,
         status: "pendente",
@@ -304,7 +365,16 @@ export async function POST(request: NextRequest) {
 
     if (error) {
       console.error("[v0] Error creating appointment:", error)
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json(
+        {
+          error: error.message,
+          details: error.details,
+          hint: error.hint,
+          funcionario_id: funcionarioId,
+          servico_id: servicoId,
+        },
+        { status: 500 },
+      )
     }
 
     console.log("[v0] Appointment created successfully:", appointment)
