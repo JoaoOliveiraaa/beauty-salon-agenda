@@ -1,5 +1,5 @@
 import { cookies } from "next/headers"
-import { createHmac, timingSafeEqual } from "node:crypto"
+import { createHmac, timingSafeEqual } from "crypto"
 
 import { env } from "@/lib/env"
 

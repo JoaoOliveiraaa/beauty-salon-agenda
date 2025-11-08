@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto"
+import { timingSafeEqual } from "crypto"
 
 import { type NextRequest, NextResponse } from "next/server"
 
