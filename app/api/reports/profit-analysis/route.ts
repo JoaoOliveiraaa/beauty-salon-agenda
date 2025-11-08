@@ -1,11 +1,10 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { createSupabaseAdminClient } from "@/lib/supabase-server"
 import { getSession } from "@/lib/auth"
+import { logger } from "@/lib/logger"
 
 export async function GET(request: NextRequest) {
   try {
-    console.log("[v0] GET /api/reports/profit-analysis - Fetching profit analysis")
-
     const session = await getSession()
     if (!session || session.tipo_usuario !== "admin") {
       return NextResponse.json({ error: "Sem permissão" }, { status: 403 })
@@ -42,7 +41,7 @@ export async function GET(request: NextRequest) {
     const { data: appointments, error: revenueError } = await revenueQuery
 
     if (revenueError) {
-      console.error("[v0] Error fetching revenue:", revenueError)
+      logger.error("reports.profit-analysis.fetch_revenue_error", { error: revenueError, period })
       return NextResponse.json({ error: revenueError.message }, { status: 500 })
     }
 
@@ -61,7 +60,7 @@ export async function GET(request: NextRequest) {
     const { data: expenses, error: expensesError } = await expensesQuery
 
     if (expensesError) {
-      console.error("[v0] Error fetching expenses:", expensesError)
+      logger.error("reports.profit-analysis.fetch_expenses_error", { error: expensesError, period })
       return NextResponse.json({ error: expensesError.message }, { status: 500 })
     }
 
@@ -120,10 +119,15 @@ export async function GET(request: NextRequest) {
       dailyData,
     }
 
-    console.log("[v0] Profit analysis calculated:", result)
+    logger.info("reports.profit-analysis.success", {
+      period,
+      totalRevenue,
+      totalExpenses,
+      netProfit,
+    })
     return NextResponse.json(result)
   } catch (error) {
-    console.error("[v0] Error in GET /api/reports/profit-analysis:", error)
+    logger.error("reports.profit-analysis.unexpected_error", { error })
     return NextResponse.json({ error: "Erro ao calcular análise de lucro" }, { status: 500 })
   }
 }

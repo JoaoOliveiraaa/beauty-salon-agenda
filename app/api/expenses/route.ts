@@ -1,163 +1,167 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { createSupabaseAdminClient } from "@/lib/supabase-server"
+import { z } from "zod"
+
 import { getSession } from "@/lib/auth"
+import { logger } from "@/lib/logger"
+import { createSupabaseAdminClient } from "@/lib/supabase-server"
+
+const expenseSchema = z.object({
+  descricao: z.string().min(1, "Descrição é obrigatória"),
+  valor: z.coerce.number({ invalid_type_error: "Valor deve ser numérico" }).nonnegative("Valor inválido"),
+  categoria: z.string().min(1, "Categoria é obrigatória"),
+  data: z
+    .string()
+    .refine((value) => !Number.isNaN(Date.parse(value)), { message: "Data inválida" })
+    .transform((value) => value.split("T")[0]),
+  observacoes: z.string().max(500).optional().nullable(),
+})
+
+const idSchema = z.object({
+  id: z.string().uuid("ID inválido"),
+})
+
+const validPeriods = new Set(["7", "30", "90", "all"])
+
+async function requireAdminSession() {
+  const session = await getSession()
+  if (!session) {
+    return { error: NextResponse.json({ error: "Não autenticado" }, { status: 401 }) }
+  }
+
+  if (session.tipo_usuario !== "admin") {
+    return { error: NextResponse.json({ error: "Sem permissão" }, { status: 403 }) }
+  }
+
+  return { session }
+}
 
 export async function GET(request: NextRequest) {
   try {
-    console.log("[v0] GET /api/expenses - Fetching expenses")
+    const { error } = await requireAdminSession()
+    if (error) return error
 
-    const session = await getSession()
-    if (!session || session.tipo_usuario !== "admin") {
-      console.log("[v0] Unauthorized access attempt")
-      return NextResponse.json({ error: "Sem permissão" }, { status: 403 })
+    const period = request.nextUrl.searchParams.get("period") ?? "30"
+    if (!validPeriods.has(period)) {
+      return NextResponse.json({ error: "Período inválido" }, { status: 400 })
     }
-
-    const searchParams = request.nextUrl.searchParams
-    const period = searchParams.get("period") || "30"
 
     const supabase = createSupabaseAdminClient()
 
     let query = supabase.from("despesas").select("*").order("data", { ascending: false })
 
     if (period !== "all") {
-      const days = Number.parseInt(period)
+      const days = Number.parseInt(period, 10)
       const startDate = new Date()
       startDate.setDate(startDate.getDate() - days)
       query = query.gte("data", startDate.toISOString().split("T")[0])
     }
 
-    const { data, error } = await query
+    const { data, error: fetchError } = await query
 
-    if (error) {
-      console.error("[v0] Error fetching expenses:", error)
-      return NextResponse.json({ error: error.message }, { status: 500 })
+    if (fetchError) {
+      logger.error("expenses.fetch_error", { error: fetchError, period })
+      return NextResponse.json({ error: "Erro ao buscar despesas" }, { status: 500 })
     }
 
-    console.log("[v0] Expenses fetched successfully:", data?.length || 0)
-    return NextResponse.json(data || [])
+    return NextResponse.json(data ?? [])
   } catch (error) {
-    console.error("[v0] Error in GET /api/expenses:", error)
+    logger.error("expenses.unexpected_error_get", { error })
     return NextResponse.json({ error: "Erro ao buscar despesas" }, { status: 500 })
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
-    console.log("[v0] POST /api/expenses - Creating expense")
-
-    const session = await getSession()
-    if (!session || session.tipo_usuario !== "admin") {
-      console.log("[v0] Unauthorized access attempt")
-      return NextResponse.json({ error: "Sem permissão" }, { status: 403 })
-    }
+    const { error } = await requireAdminSession()
+    if (error) return error
 
     const body = await request.json()
-    const { descricao, valor, categoria, data, observacoes } = body
+    const parsed = expenseSchema.safeParse(body)
 
-    if (!descricao || !valor || !categoria || !data) {
-      return NextResponse.json({ error: "Campos obrigatórios faltando" }, { status: 400 })
+    if (!parsed.success) {
+      return NextResponse.json({ error: "Dados inválidos" }, { status: 400 })
     }
 
     const supabase = createSupabaseAdminClient()
 
-    const { data: expense, error } = await supabase
+    const { data, error: insertError } = await supabase
       .from("despesas")
-      .insert({
-        descricao,
-        valor: Number.parseFloat(valor),
-        categoria,
-        data,
-        observacoes,
-      })
+      .insert(parsed.data)
       .select()
       .single()
 
-    if (error) {
-      console.error("[v0] Error creating expense:", error)
-      return NextResponse.json({ error: error.message }, { status: 500 })
+    if (insertError) {
+      logger.error("expenses.insert_error", { error: insertError })
+      return NextResponse.json({ error: "Erro ao criar despesa" }, { status: 500 })
     }
 
-    console.log("[v0] Expense created successfully:", expense.id)
-    return NextResponse.json(expense)
+    return NextResponse.json(data)
   } catch (error) {
-    console.error("[v0] Error in POST /api/expenses:", error)
+    logger.error("expenses.unexpected_error_post", { error })
     return NextResponse.json({ error: "Erro ao criar despesa" }, { status: 500 })
   }
 }
 
 export async function PUT(request: NextRequest) {
   try {
-    console.log("[v0] PUT /api/expenses - Updating expense")
-
-    const session = await getSession()
-    if (!session || session.tipo_usuario !== "admin") {
-      return NextResponse.json({ error: "Sem permissão" }, { status: 403 })
-    }
+    const { error } = await requireAdminSession()
+    if (error) return error
 
     const body = await request.json()
-    const { id, descricao, valor, categoria, data, observacoes } = body
+    const combinedSchema = idSchema.merge(expenseSchema)
+    const parsed = combinedSchema.safeParse(body)
 
-    if (!id) {
-      return NextResponse.json({ error: "ID é obrigatório" }, { status: 400 })
+    if (!parsed.success) {
+      return NextResponse.json({ error: "Dados inválidos" }, { status: 400 })
     }
 
+    const { id, ...payload } = parsed.data
     const supabase = createSupabaseAdminClient()
 
-    const { data: expense, error } = await supabase
+    const { data, error: updateError } = await supabase
       .from("despesas")
-      .update({
-        descricao,
-        valor: Number.parseFloat(valor),
-        categoria,
-        data,
-        observacoes,
-      })
+      .update(payload)
       .eq("id", id)
       .select()
       .single()
 
-    if (error) {
-      console.error("[v0] Error updating expense:", error)
-      return NextResponse.json({ error: error.message }, { status: 500 })
+    if (updateError) {
+      logger.error("expenses.update_error", { error: updateError, id })
+      return NextResponse.json({ error: "Erro ao atualizar despesa" }, { status: 500 })
     }
 
-    console.log("[v0] Expense updated successfully:", id)
-    return NextResponse.json(expense)
+    return NextResponse.json(data)
   } catch (error) {
-    console.error("[v0] Error in PUT /api/expenses:", error)
+    logger.error("expenses.unexpected_error_put", { error })
     return NextResponse.json({ error: "Erro ao atualizar despesa" }, { status: 500 })
   }
 }
 
 export async function DELETE(request: NextRequest) {
   try {
-    console.log("[v0] DELETE /api/expenses - Deleting expense")
+    const { error } = await requireAdminSession()
+    if (error) return error
 
-    const session = await getSession()
-    if (!session || session.tipo_usuario !== "admin") {
-      return NextResponse.json({ error: "Sem permissão" }, { status: 403 })
+    const idResult = idSchema.safeParse({ id: request.nextUrl.searchParams.get("id") })
+    if (!idResult.success) {
+      return NextResponse.json({ error: "ID inválido" }, { status: 400 })
     }
 
-    const searchParams = request.nextUrl.searchParams
-    const id = searchParams.get("id")
-
-    if (!id) {
-      return NextResponse.json({ error: "ID é obrigatório" }, { status: 400 })
-    }
+    const { id } = idResult.data
 
     const supabase = createSupabaseAdminClient()
 
-    const { error } = await supabase.from("despesas").delete().eq("id", id)
+    const { error: deleteError } = await supabase.from("despesas").delete().eq("id", id)
 
-    if (error) {
-      console.error("[v0] Error deleting expense:", error)
-      return NextResponse.json({ error: error.message }, { status: 500 })
+    if (deleteError) {
+      logger.error("expenses.delete_error", { error: deleteError, id })
+      return NextResponse.json({ error: "Erro ao deletar despesa" }, { status: 500 })
     }
 
-    console.log("[v0] Expense deleted successfully:", id)
     return NextResponse.json({ success: true })
   } catch (error) {
-    console.error("[v0] Error in DELETE /api/expenses:", error)
+    logger.error("expenses.unexpected_error_delete", { error })
     return NextResponse.json({ error: "Erro ao deletar despesa" }, { status: 500 })
   }
 }
+

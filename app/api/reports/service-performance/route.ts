@@ -1,14 +1,13 @@
 import { NextResponse } from "next/server"
 import { createSupabaseAdminClient } from "@/lib/supabase-server"
 import { getSession } from "@/lib/auth"
+import { logger } from "@/lib/logger"
 
 export async function GET(request: Request) {
   try {
-    console.log("[v0] Service performance API called")
-
     const session = await getSession()
     if (!session || session.tipo_usuario !== "admin") {
-      console.log("[v0] Permission denied")
+      logger.warn("reports.service-performance.permission_denied", { userId: session?.id })
       return NextResponse.json({ error: "Sem permissão" }, { status: 403 })
     }
 
@@ -28,7 +27,7 @@ export async function GET(request: Request) {
     const { data: services, error: servError } = await supabase.from("servicos").select("id, nome_servico, preco")
 
     if (servError) {
-      console.error("[v0] Error fetching services:", servError.message)
+      logger.error("reports.service-performance.fetch_services_error", { error: servError })
       return NextResponse.json({ error: servError.message }, { status: 500 })
     }
 
@@ -42,7 +41,10 @@ export async function GET(request: Request) {
           .gte("data_agendamento", dateString)
 
         if (aptError) {
-          console.error(`[v0] Error fetching appointments for ${service.nome_servico}:`, aptError.message)
+          logger.error("reports.service-performance.fetch_appointments_error", {
+            error: aptError,
+            servicoId: service.id,
+          })
           return {
             id: service.id,
             nome_servico: service.nome_servico,
@@ -74,10 +76,13 @@ export async function GET(request: Request) {
 
     const sortedPerformance = servicePerformance.sort((a, b) => b.receita_total - a.receita_total)
 
-    console.log("[v0] Service performance fetched:", sortedPerformance.length, "services")
+    logger.info("reports.service-performance.success", {
+      period,
+      serviceCount: sortedPerformance.length,
+    })
     return NextResponse.json(sortedPerformance)
   } catch (error) {
-    console.error("[v0] Error fetching service performance:", error)
+    logger.error("reports.service-performance.unexpected_error", { error })
     return NextResponse.json({ error: "Erro interno do servidor" }, { status: 500 })
   }
 }

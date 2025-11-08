@@ -1,32 +1,54 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { createSupabaseAdminClient } from "@/lib/supabase-server"
+import { z } from "zod"
+
 import { getSession } from "@/lib/auth"
+import { logger } from "@/lib/logger"
+import { createSupabaseAdminClient } from "@/lib/supabase-server"
+
+const appointmentSchema = z
+  .object({
+    appointmentId: z.string().uuid("ID do agendamento inválido"),
+    status: z.enum(["pendente", "confirmado", "concluido", "cancelado"]).optional(),
+    pago: z.boolean().optional(),
+  })
+  .refine((data) => data.status !== undefined || data.pago !== undefined, {
+    message: "Status ou pagamento devem ser informados",
+    path: ["status"],
+  })
 
 export async function PATCH(request: NextRequest) {
   try {
-    console.log("[v0] Updating appointment status/payment")
-
     const session = await getSession()
     if (!session) {
-      console.log("[v0] No session found")
       return NextResponse.json({ error: "Não autenticado" }, { status: 401 })
     }
 
-    const { appointmentId, status, pago } = await request.json()
-    console.log("[v0] Update data:", { appointmentId, status, pago })
+    const body = await request.json()
+    const parsed = appointmentSchema.safeParse(body)
 
-    if (!appointmentId) {
-      return NextResponse.json({ error: "ID do agendamento é obrigatório" }, { status: 400 })
+    if (!parsed.success) {
+      return NextResponse.json({ error: "Dados inválidos" }, { status: 400 })
     }
+
+    const { appointmentId, status, pago } = parsed.data
 
     const supabase = createSupabaseAdminClient()
 
-    // Build update object
-    const updateData: any = {}
+    if (session.tipo_usuario === "funcionario") {
+      const { data: appointmentOwner, error: ownerError } = await supabase
+        .from("agendamentos")
+        .select("funcionario_id")
+        .eq("id", appointmentId)
+        .single()
+
+      if (ownerError || !appointmentOwner || appointmentOwner.funcionario_id !== session.id) {
+        return NextResponse.json({ error: "Sem permissão" }, { status: 403 })
+      }
+    }
+
+    const updateData: Record<string, unknown> = {}
     if (status !== undefined) updateData.status = status
     if (pago !== undefined) updateData.pago = pago
-
-    console.log("[v0] Updating with data:", updateData)
 
     const { data, error } = await supabase
       .from("agendamentos")
@@ -36,14 +58,14 @@ export async function PATCH(request: NextRequest) {
       .single()
 
     if (error) {
-      console.error("[v0] Error updating appointment:", error)
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      logger.error("appointments.update.database_error", { error, appointmentId })
+      return NextResponse.json({ error: "Erro ao atualizar agendamento" }, { status: 500 })
     }
 
-    console.log("[v0] Appointment updated successfully:", data)
     return NextResponse.json({ success: true, data })
-  } catch (error: any) {
-    console.error("[v0] Error in update appointment:", error)
-    return NextResponse.json({ error: error.message }, { status: 500 })
+  } catch (error) {
+    logger.error("appointments.update.unexpected_error", { error })
+    return NextResponse.json({ error: "Erro ao atualizar agendamento" }, { status: 500 })
   }
 }
+

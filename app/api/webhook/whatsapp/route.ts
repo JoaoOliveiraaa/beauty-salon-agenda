@@ -1,5 +1,10 @@
-import { getSupabaseServerClient } from "@/lib/supabase-server"
+import { timingSafeEqual } from "node:crypto"
+
 import { type NextRequest, NextResponse } from "next/server"
+
+import { env } from "@/lib/env"
+import { logger } from "@/lib/logger"
+import { getSupabaseServerClient } from "@/lib/supabase-server"
 
 interface WhatsAppWebhookData {
   cliente_nome: string
@@ -29,10 +34,30 @@ function normalizeTimeFormat(time: string): string | null {
 
 export async function POST(request: NextRequest) {
   try {
+    if (!env.WHATSAPP_WEBHOOK_SECRET) {
+      logger.error("whatsapp-webhook.secret_not_configured")
+      return NextResponse.json({ error: "Webhook indisponível" }, { status: 503 })
+    }
+
+    const providedSecret =
+      request.headers.get("x-webhook-secret") ?? request.nextUrl.searchParams.get("secret") ?? undefined
+
+    if (!providedSecret) {
+      return NextResponse.json({ error: "Não autorizado" }, { status: 401 })
+    }
+
+    const expectedBuffer = Buffer.from(env.WHATSAPP_WEBHOOK_SECRET, "utf8")
+    const providedBuffer = Buffer.from(providedSecret, "utf8")
+
+    if (
+      expectedBuffer.length !== providedBuffer.length ||
+      !timingSafeEqual(expectedBuffer, providedBuffer)
+    ) {
+      return NextResponse.json({ error: "Não autorizado" }, { status: 401 })
+    }
+
     const searchParams = request.nextUrl.searchParams
     let data: WhatsAppWebhookData
-
-    console.log("[v0] === WEBHOOK REQUEST DEBUG ===")
 
     if (searchParams.has("cliente_nome") || searchParams.has("Nome completo do cliente")) {
       data = {
@@ -47,19 +72,14 @@ export async function POST(request: NextRequest) {
         data_agendamento: searchParams.get("data_agendamento") || searchParams.get("Formato: YYYY-MM-DD") || "",
         hora_agendamento: searchParams.get("hora_agendamento") || searchParams.get("Formato: HH:MM") || "",
       }
-      console.log("[v0] Data source: Query Parameters")
     } else {
       const rawBody = await request.text()
-      console.log("[v0] Raw body:", rawBody)
       try {
         data = JSON.parse(rawBody)
-        console.log("[v0] Data source: JSON Body")
       } catch (parseError) {
         return NextResponse.json({ error: "Invalid JSON in request body", received: rawBody }, { status: 400 })
       }
     }
-
-    console.log("[v0] Parsed data:", JSON.stringify(data, null, 2))
 
     const hasClienteNome = data.cliente_nome && data.cliente_nome.trim() !== "" && !data.cliente_nome.includes("{{")
     const hasClienteTelefone =
@@ -101,42 +121,49 @@ export async function POST(request: NextRequest) {
 
     if (servicoId) {
       if (!isValidUUID(servicoId)) {
-        console.log("[v0] Invalid servico_id UUID, will search by name instead:", servicoId)
         servicoId = undefined
       } else {
-        console.log("[v0] Valid servico_id UUID:", servicoId)
-        // Verify the service exists
-        const { data: serviceExists } = await supabase.from("servicos").select("id").eq("id", servicoId).single()
+        const { data: serviceExists, error: serviceError } = await supabase
+          .from("servicos")
+          .select("id")
+          .eq("id", servicoId)
+          .single()
 
-        if (!serviceExists) {
-          console.log("[v0] Service UUID not found in database:", servicoId)
+        if (serviceError || !serviceExists) {
+          if (serviceError) {
+            logger.error("whatsapp-webhook.service_validation_error", {
+              error: serviceError,
+              servicoId,
+            })
+          }
           servicoId = undefined
         }
       }
     }
 
     if (!servicoId && data.servico_nome) {
-      console.log("[v0] Looking up servico by name:", data.servico_nome)
-      const { data: servico, error } = await supabase
+      const { data: servico, error: servicoError } = await supabase
         .from("servicos")
         .select("id")
         .ilike("nome_servico", `%${data.servico_nome}%`)
         .limit(1)
         .single()
 
-      if (error) console.log("[v0] Error finding servico:", error)
+      if (servicoError) {
+        logger.error("whatsapp-webhook.service_lookup_error", {
+          error: servicoError,
+          servicoNome: data.servico_nome,
+        })
+      }
       if (servico) {
         servicoId = servico.id
-        console.log("[v0] Found servico_id:", servicoId)
       }
     }
 
     if (!servicoId) {
-      console.log("[v0] No servico specified, getting first available")
       const { data: firstService } = await supabase.from("servicos").select("id").limit(1).single()
       if (firstService) {
         servicoId = firstService.id
-        console.log("[v0] Using first servico_id:", servicoId)
       }
     }
 
@@ -148,38 +175,44 @@ export async function POST(request: NextRequest) {
 
     if (funcionarioId) {
       if (!isValidUUID(funcionarioId)) {
-        console.log("[v0] Invalid funcionario_id UUID, will search by name instead:", funcionarioId)
         funcionarioId = undefined
       } else {
-        console.log("[v0] Valid funcionario_id UUID:", funcionarioId)
-        // Verify the employee exists
-        const { data: employeeExists } = await supabase
+        const { data: employeeExists, error: employeeError } = await supabase
           .from("users")
           .select("id")
           .eq("id", funcionarioId)
           .eq("tipo_usuario", "funcionario")
           .single()
 
-        if (!employeeExists) {
-          console.log("[v0] Employee UUID not found in database:", funcionarioId)
+        if (employeeError || !employeeExists) {
+          if (employeeError) {
+            logger.error("whatsapp-webhook.employee_validation_error", {
+              error: employeeError,
+              funcionarioId,
+            })
+          }
           funcionarioId = undefined
         }
       }
     }
 
     if (!funcionarioId && data.funcionario_nome) {
-      console.log("[v0] Looking up funcionario by name:", data.funcionario_nome)
-
-      const { data: employeeServices } = await supabase
+      const { data: employeeServices, error: employeeServicesError } = await supabase
         .from("funcionario_servicos")
         .select("funcionario_id")
         .eq("servico_id", servicoId)
 
       const employeeIds = employeeServices?.map((es) => es.funcionario_id) || []
-      console.log("[v0] Employees who can perform service:", employeeIds)
+
+      if (employeeServicesError) {
+        logger.error("whatsapp-webhook.employee_services_lookup_error", {
+          error: employeeServicesError,
+          servicoId,
+        })
+      }
 
       if (employeeIds.length > 0) {
-        const { data: funcionario, error } = await supabase
+        const { data: funcionario, error: funcionarioError } = await supabase
           .from("users")
           .select("id")
           .eq("tipo_usuario", "funcionario")
@@ -188,16 +221,19 @@ export async function POST(request: NextRequest) {
           .limit(1)
           .single()
 
-        if (error) console.log("[v0] Error finding funcionario:", error)
+        if (funcionarioError) {
+          logger.error("whatsapp-webhook.employee_lookup_error", {
+            error: funcionarioError,
+            funcionarioNome: data.funcionario_nome,
+          })
+        }
         if (funcionario) {
           funcionarioId = funcionario.id
-          console.log("[v0] Found funcionario_id:", funcionarioId)
         }
       }
     }
 
     if (funcionarioId && servicoId) {
-      console.log("[v0] Validating funcionario can perform service")
       const { data: canPerformService } = await supabase
         .from("funcionario_servicos")
         .select("*")
@@ -218,7 +254,6 @@ export async function POST(request: NextRequest) {
     }
 
     if (!funcionarioId && servicoId) {
-      console.log("[v0] Finding funcionario who can perform service")
       const { data: employeeServices } = await supabase
         .from("funcionario_servicos")
         .select("funcionario_id")
@@ -237,7 +272,6 @@ export async function POST(request: NextRequest) {
 
         if (firstStaff) {
           funcionarioId = firstStaff.id
-          console.log("[v0] Using first available funcionario_id:", funcionarioId)
         }
       } else {
         return NextResponse.json(
@@ -282,14 +316,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Horário já agendado" }, { status: 409 })
     }
 
-    console.log("[v0] Creating appointment with:", {
-      funcionario_id: funcionarioId,
-      servico_id: servicoId,
-      cliente_nome: data.cliente_nome,
-      data: data.data_agendamento,
-      hora: data.hora_agendamento,
-    })
-
     const { data: appointment, error } = await supabase
       .from("agendamentos")
       .insert({
@@ -306,7 +332,6 @@ export async function POST(request: NextRequest) {
       .single()
 
     if (error) {
-      console.error("[v0] Error creating appointment:", error)
       return NextResponse.json(
         {
           error: error.message,
@@ -320,9 +345,6 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    console.log("[v0] Appointment created successfully:", appointment)
-    console.log("[v0] === END WEBHOOK REQUEST ===")
-
     return NextResponse.json(
       {
         success: true,
@@ -332,13 +354,31 @@ export async function POST(request: NextRequest) {
       { status: 201 },
     )
   } catch (error: any) {
-    console.error("[v0] Webhook error:", error)
+    logger.error("whatsapp-webhook.unexpected_error", { error })
     return NextResponse.json({ error: error.message || "Internal server error" }, { status: 500 })
   }
 }
 
 // GET endpoint for testing
 export async function GET(request: NextRequest) {
+  if (!env.WHATSAPP_WEBHOOK_SECRET) {
+    return NextResponse.json({ error: "Webhook indisponível" }, { status: 503 })
+  }
+
+  const providedSecret =
+    request.headers.get("x-webhook-secret") ?? request.nextUrl.searchParams.get("secret") ?? undefined
+
+  if (!providedSecret) {
+    return NextResponse.json({ error: "Não autorizado" }, { status: 401 })
+  }
+
+  const expectedBuffer = Buffer.from(env.WHATSAPP_WEBHOOK_SECRET, "utf8")
+  const providedBuffer = Buffer.from(providedSecret, "utf8")
+
+  if (expectedBuffer.length !== providedBuffer.length || !timingSafeEqual(expectedBuffer, providedBuffer)) {
+    return NextResponse.json({ error: "Não autorizado" }, { status: 401 })
+  }
+
   const searchParams = request.nextUrl.searchParams
   const params = Object.fromEntries(searchParams.entries())
 

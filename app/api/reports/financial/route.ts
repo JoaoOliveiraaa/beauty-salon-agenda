@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { getSupabaseServerClient } from "@/lib/supabase-server"
 import { getSession } from "@/lib/auth"
+import { logger } from "@/lib/logger"
 
 export async function GET(request: NextRequest) {
   try {
@@ -36,7 +37,7 @@ export async function GET(request: NextRequest) {
     const { data: appointments, error } = await query
 
     if (error) {
-      console.error("[v0] Error fetching appointments:", error)
+      logger.error("reports.financial.fetch_appointments_error", { error, startDate, endDate })
       return NextResponse.json({ error: "Erro ao buscar dados" }, { status: 500 })
     }
 
@@ -70,7 +71,7 @@ export async function GET(request: NextRequest) {
       },
     })
   } catch (error) {
-    console.error("[v0] Error generating CSV:", error)
+    logger.error("reports.financial.unexpected_error", { error })
     return NextResponse.json({ error: "Erro ao gerar relatório" }, { status: 500 })
   }
 }
