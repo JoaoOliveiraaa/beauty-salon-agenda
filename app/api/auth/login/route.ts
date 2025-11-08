@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
 
     const { email, password } = parsed.data
 
-    const supabase = createServerClient()
+    const supabase = await createServerClient()
 
     const { data: user, error } = await supabase
       .from("users")
