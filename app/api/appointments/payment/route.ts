@@ -1,64 +1,43 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { getSupabaseServerClient } from "@/lib/supabase-server"
 import { getSession } from "@/lib/auth"
-import { secureLog, genericError } from "@/lib/security"
-import { updatePaymentSchema } from "@/lib/schemas"
 
 export async function PATCH(request: NextRequest) {
   try {
+    console.log("[v0] Payment update request received")
+
     const session = await getSession()
     if (!session) {
-      secureLog("warn", "Tentativa de atualização de pagamento sem autenticação")
-      return NextResponse.json(genericError("Não autorizado"), { status: 401 })
+      console.log("[v0] No session found")
+      return NextResponse.json({ error: "Não autorizado" }, { status: 401 })
     }
 
-    const body = await request.json()
+    const { appointmentId, pago } = await request.json()
+    console.log("[v0] Updating payment status:", { appointmentId, pago })
 
-    // Validação com Zod
-    const validationResult = updatePaymentSchema.safeParse(body)
-    if (!validationResult.success) {
-      const errorMessage = validationResult.error.errors[0]?.message || "Dados inválidos"
-      return NextResponse.json(genericError(errorMessage), { status: 400 })
+    if (!appointmentId || typeof pago !== "boolean") {
+      return NextResponse.json({ error: "Dados inválidos" }, { status: 400 })
     }
-
-    const { appointmentId, pago } = validationResult.data
 
     const supabase = await getSupabaseServerClient()
-
-    // Verificar se o agendamento existe e se o usuário tem permissão
-    const { data: appointment } = await supabase
-      .from("agendamentos")
-      .select("funcionario_id")
-      .eq("id", appointmentId)
-      .single()
-
-    if (!appointment) {
-      return NextResponse.json(genericError("Agendamento não encontrado"), { status: 404 })
-    }
-
-    // Staff só pode atualizar seus próprios agendamentos
-    if (session.tipo_usuario === "funcionario" && appointment.funcionario_id !== session.id) {
-      secureLog("warn", "Funcionário tentou atualizar pagamento de outro")
-      return NextResponse.json(genericError("Sem permissão"), { status: 403 })
-    }
 
     // Update payment status
     const { data, error } = await supabase
       .from("agendamentos")
       .update({ pago })
       .eq("id", appointmentId)
-      .select("id, pago")
+      .select()
       .single()
 
     if (error) {
-      secureLog("error", "Erro ao atualizar pagamento", error)
-      return NextResponse.json(genericError("Erro ao atualizar pagamento"), { status: 500 })
+      console.error("[v0] Error updating payment:", error)
+      return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
-    secureLog("info", "Pagamento atualizado com sucesso")
+    console.log("[v0] Payment status updated successfully")
     return NextResponse.json({ success: true, data })
   } catch (error) {
-    secureLog("error", "Erro na API de pagamento", error)
-    return NextResponse.json(genericError("Erro ao atualizar pagamento"), { status: 500 })
+    console.error("[v0] Error in payment update:", error)
+    return NextResponse.json({ error: "Erro ao atualizar pagamento" }, { status: 500 })
   }
 }

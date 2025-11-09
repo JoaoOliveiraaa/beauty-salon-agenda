@@ -1,26 +1,20 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { getSupabaseServerClient } from "@/lib/supabase-server"
+import { createSupabaseAdminClient } from "@/lib/supabase-server"
 import { getSession } from "@/lib/auth"
-import { secureLog, genericError } from "@/lib/security"
 
 export async function GET(request: NextRequest) {
   try {
+    console.log("[v0] GET /api/reports/profit-analysis - Fetching profit analysis")
+
     const session = await getSession()
     if (!session || session.tipo_usuario !== "admin") {
-      secureLog("warn", "Tentativa de acesso não autorizado a análise de lucro")
-      return NextResponse.json(genericError("Sem permissão"), { status: 403 })
+      return NextResponse.json({ error: "Sem permissão" }, { status: 403 })
     }
 
     const searchParams = request.nextUrl.searchParams
     const period = searchParams.get("period") || "30"
 
-    // Validação do período
-    const validPeriods = ["7", "30", "90", "365", "all"]
-    if (!validPeriods.includes(period)) {
-      return NextResponse.json(genericError("Período inválido"), { status: 400 })
-    }
-
-    const supabase = await getSupabaseServerClient()
+    const supabase = createSupabaseAdminClient()
 
     // Calculate date range
     let dateFilter = ""
@@ -48,13 +42,13 @@ export async function GET(request: NextRequest) {
     const { data: appointments, error: revenueError } = await revenueQuery
 
     if (revenueError) {
-      secureLog("error", "Erro ao buscar receita", revenueError)
-      return NextResponse.json(genericError("Erro ao calcular análise de lucro"), { status: 500 })
+      console.error("[v0] Error fetching revenue:", revenueError)
+      return NextResponse.json({ error: revenueError.message }, { status: 500 })
     }
 
     const totalRevenue =
       appointments?.reduce((sum, apt) => {
-        return sum + ((apt.servicos as any)?.preco || 0)
+        return sum + (apt.servicos?.preco || 0)
       }, 0) || 0
 
     // Get expenses
@@ -67,8 +61,8 @@ export async function GET(request: NextRequest) {
     const { data: expenses, error: expensesError } = await expensesQuery
 
     if (expensesError) {
-      secureLog("error", "Erro ao buscar despesas", expensesError)
-      return NextResponse.json(genericError("Erro ao calcular análise de lucro"), { status: 500 })
+      console.error("[v0] Error fetching expenses:", expensesError)
+      return NextResponse.json({ error: expensesError.message }, { status: 500 })
     }
 
     const totalExpenses = expenses?.reduce((sum, exp) => sum + Number.parseFloat(exp.valor.toString()), 0) || 0
@@ -102,7 +96,7 @@ export async function GET(request: NextRequest) {
       const dayRevenue =
         appointments
           ?.filter((apt) => apt.data_agendamento === date)
-          .reduce((sum, apt) => sum + ((apt.servicos as any)?.preco || 0), 0) || 0
+          .reduce((sum, apt) => sum + (apt.servicos?.preco || 0), 0) || 0
 
       const dayExpenses =
         expenses
@@ -126,10 +120,10 @@ export async function GET(request: NextRequest) {
       dailyData,
     }
 
-    secureLog("info", "Análise de lucro calculada com sucesso")
+    console.log("[v0] Profit analysis calculated:", result)
     return NextResponse.json(result)
   } catch (error) {
-    secureLog("error", "Erro ao calcular análise de lucro", error)
-    return NextResponse.json(genericError("Erro ao calcular análise de lucro"), { status: 500 })
+    console.error("[v0] Error in GET /api/reports/profit-analysis:", error)
+    return NextResponse.json({ error: "Erro ao calcular análise de lucro" }, { status: 500 })
   }
 }

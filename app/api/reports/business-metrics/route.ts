@@ -1,18 +1,21 @@
 import { NextResponse } from "next/server"
-import { getSupabaseServerClient } from "@/lib/supabase-server"
+import { createSupabaseAdminClient } from "@/lib/supabase-server"
 import { getSession } from "@/lib/auth"
-import { secureLog, genericError } from "@/lib/security"
 
 export async function GET() {
   try {
+    console.log("[v0] Business metrics API called")
+
     const session = await getSession()
+    console.log("[v0] Session:", session ? `${session.email} (${session.tipo_usuario})` : "none")
 
     if (!session || session.tipo_usuario !== "admin") {
-      secureLog("warn", "Tentativa de acesso não autorizado a métricas")
-      return NextResponse.json(genericError("Sem permissão"), { status: 403 })
+      console.log("[v0] Permission denied")
+      return NextResponse.json({ error: "Sem permissão" }, { status: 403 })
     }
 
-    const supabase = await getSupabaseServerClient()
+    const supabase = createSupabaseAdminClient()
+    console.log("[v0] Fetching business metrics from database...")
 
     // Get date 30 days ago
     const thirtyDaysAgo = new Date()
@@ -32,8 +35,8 @@ export async function GET() {
       .gte("data_agendamento", dateFilter)
 
     if (completedError) {
-      secureLog("error", "Erro ao buscar agendamentos concluídos", completedError)
-      return NextResponse.json(genericError("Erro ao buscar métricas"), { status: 500 })
+      console.error("[v0] Error fetching completed appointments:", completedError.message)
+      return NextResponse.json({ error: completedError.message }, { status: 500 })
     }
 
     // Get cancelled appointments
@@ -44,8 +47,8 @@ export async function GET() {
       .gte("data_agendamento", dateFilter)
 
     if (cancelledError) {
-      secureLog("error", "Erro ao buscar agendamentos cancelados", cancelledError)
-      return NextResponse.json(genericError("Erro ao buscar métricas"), { status: 500 })
+      console.error("[v0] Error fetching cancelled appointments:", cancelledError.message)
+      return NextResponse.json({ error: cancelledError.message }, { status: 500 })
     }
 
     // Get all appointments for cancellation rate
@@ -55,8 +58,8 @@ export async function GET() {
       .gte("data_agendamento", dateFilter)
 
     if (allError) {
-      secureLog("error", "Erro ao buscar todos os agendamentos", allError)
-      return NextResponse.json(genericError("Erro ao buscar métricas"), { status: 500 })
+      console.error("[v0] Error fetching all appointments:", allError.message)
+      return NextResponse.json({ error: allError.message }, { status: 500 })
     }
 
     // Calculate metrics
@@ -65,10 +68,7 @@ export async function GET() {
     const totalCancelamentos = cancelledAppointments?.length || 0
     const totalAppointments = allAppointments?.length || 0
 
-    const prices = completedAppointments?.map((a) => {
-      const servico = a.servicos as any
-      return servico?.preco || 0
-    }) || []
+    const prices = completedAppointments?.map((a) => a.servicos?.preco || 0) || []
     const ticketMedio = prices.length > 0 ? prices.reduce((a, b) => a + b, 0) / prices.length : 0
 
     const taxaCancelamento =
@@ -82,7 +82,7 @@ export async function GET() {
       .gte("data_agendamento", dateFilter)
 
     if (hoursError) {
-      secureLog("error", "Erro ao buscar horários de pico", hoursError)
+      console.error("[v0] Error fetching hours:", hoursError.message)
     }
 
     const hourCounts: Record<number, number> = {}
@@ -104,7 +104,7 @@ export async function GET() {
       .gte("data_agendamento", dateFilter)
 
     if (daysError) {
-      secureLog("error", "Erro ao buscar dias de pico", daysError)
+      console.error("[v0] Error fetching days:", daysError.message)
     }
 
     const dayCounts: Record<number, number> = {}
@@ -130,10 +130,10 @@ export async function GET() {
       peakDays,
     }
 
-    secureLog("info", "Métricas de negócio obtidas com sucesso")
+    console.log("[v0] Returning response:", response)
     return NextResponse.json(response)
   } catch (error) {
-    secureLog("error", "Erro ao buscar métricas de negócio", error)
-    return NextResponse.json(genericError("Erro interno do servidor"), { status: 500 })
+    console.error("[v0] Error fetching business metrics:", error)
+    return NextResponse.json({ error: "Erro interno do servidor" }, { status: 500 })
   }
 }
