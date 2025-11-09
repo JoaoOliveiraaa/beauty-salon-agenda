@@ -44,7 +44,7 @@ export default async function DisponibilidadesPage() {
       </div>
 
       <div className="space-y-6">
-        {(Object.entries(groupedByStaff) as [string, { nome: string; slots: any[] }][]).map(([staffId, data]) => (
+        {Object.entries(groupedByStaff).map(([staffId, data]) => (
           <Card key={staffId} className="shadow-sm">
             <CardHeader>
               <CardTitle>{data.nome}</CardTitle>

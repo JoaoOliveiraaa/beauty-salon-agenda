@@ -54,7 +54,7 @@ export async function GET(request: NextRequest) {
 
     const totalRevenue =
       appointments?.reduce((sum, apt) => {
-        return sum + ((apt.servicos as any)?.preco || 0)
+        return sum + (apt.servicos?.preco || 0)
       }, 0) || 0
 
     // Get expenses
@@ -102,7 +102,7 @@ export async function GET(request: NextRequest) {
       const dayRevenue =
         appointments
           ?.filter((apt) => apt.data_agendamento === date)
-          .reduce((sum, apt) => sum + ((apt.servicos as any)?.preco || 0), 0) || 0
+          .reduce((sum, apt) => sum + (apt.servicos?.preco || 0), 0) || 0
 
       const dayExpenses =
         expenses

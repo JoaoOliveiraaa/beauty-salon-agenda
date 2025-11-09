@@ -65,10 +65,7 @@ export async function GET() {
     const totalCancelamentos = cancelledAppointments?.length || 0
     const totalAppointments = allAppointments?.length || 0
 
-    const prices = completedAppointments?.map((a) => {
-      const servico = a.servicos as any
-      return servico?.preco || 0
-    }) || []
+    const prices = completedAppointments?.map((a) => a.servicos?.preco || 0) || []
     const ticketMedio = prices.length > 0 ? prices.reduce((a, b) => a + b, 0) / prices.length : 0
 
     const taxaCancelamento =

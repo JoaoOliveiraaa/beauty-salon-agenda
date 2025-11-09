@@ -271,7 +271,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(genericError("Não foi possível determinar funcionário ou serviço"), { status: 400 })
     }
 
-    // Reutilizar appointmentDate já criado anteriormente
+    const appointmentDate = new Date(data.data_agendamento)
     const dayOfWeek = appointmentDate.getDay()
 
     const { data: blockedTimes } = await supabase

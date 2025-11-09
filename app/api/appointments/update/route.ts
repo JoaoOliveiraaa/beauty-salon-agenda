@@ -1,8 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { getSupabaseServerClient } from "@/lib/supabase-server"
 import { getSession } from "@/lib/auth"
-import { secureLog, genericError } from "@/lib/security"
-import { updateAppointmentSchema } from "@/lib/schemas"
+import { secureLog, isValidUUID, isValidAppointmentStatus, genericError } from "@/lib/security"
 
 export async function PATCH(request: NextRequest) {
   try {
@@ -12,16 +11,20 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json(genericError("Não autenticado"), { status: 401 })
     }
 
-    const body = await request.json()
+    const { appointmentId, status, pago } = await request.json()
 
-    // Validação com Zod
-    const validationResult = updateAppointmentSchema.safeParse(body)
-    if (!validationResult.success) {
-      const errorMessage = validationResult.error.errors[0]?.message || "Dados inválidos"
-      return NextResponse.json(genericError(errorMessage), { status: 400 })
+    // Validação de entrada
+    if (!appointmentId || !isValidUUID(appointmentId)) {
+      return NextResponse.json(genericError("ID do agendamento inválido"), { status: 400 })
     }
 
-    const { appointmentId, status, pago } = validationResult.data
+    if (status !== undefined && !isValidAppointmentStatus(status)) {
+      return NextResponse.json(genericError("Status inválido"), { status: 400 })
+    }
+
+    if (pago !== undefined && typeof pago !== "boolean") {
+      return NextResponse.json(genericError("Valor de pagamento inválido"), { status: 400 })
+    }
 
     const supabase = await getSupabaseServerClient()
 
