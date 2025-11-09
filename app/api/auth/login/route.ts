@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { createServerClient } from "@/lib/supabase-server"
 import { createSession } from "@/lib/auth"
+import bcrypt from "bcryptjs"
 
 export async function POST(request: NextRequest) {
   try {
@@ -12,7 +13,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Email e senha são obrigatórios" }, { status: 400 })
     }
 
-    const supabase = createServerClient()
+    const supabase = await createServerClient()
 
     // Get user from database
     const { data: user, error } = await supabase.from("users").select("*").eq("email", email).single()
@@ -25,12 +26,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Credenciais inválidas" }, { status: 401 })
     }
 
-    // Simple plain text password comparison
-    const isValidPassword = password === user.senha
+    // Compare password with bcrypt
+    const isValidPassword = await bcrypt.compare(password, user.senha)
 
     console.log("[v0] Password comparison:", {
       input: password,
-      stored: user.senha,
+      storedHash: user.senha?.substring(0, 20) + "...",
       match: isValidPassword,
     })
 
