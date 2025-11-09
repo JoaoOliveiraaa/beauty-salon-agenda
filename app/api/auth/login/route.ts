@@ -2,13 +2,8 @@ import { type NextRequest, NextResponse } from "next/server"
 import { getSupabaseServerClient } from "@/lib/supabase-server"
 import { createSession } from "@/lib/auth"
 import bcrypt from "bcryptjs"
-import { 
-  secureLog, 
-  isValidEmail, 
-  checkRateLimit, 
-  getClientIp, 
-  genericError 
-} from "@/lib/security"
+import { secureLog, checkRateLimit, getClientIp, genericError } from "@/lib/security"
+import { loginSchema } from "@/lib/schemas"
 
 export async function POST(request: NextRequest) {
   try {
@@ -24,21 +19,17 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json()
-    const { email, password } = body
+    
+    // Validação com Zod
+    const validationResult = loginSchema.safeParse(body)
+    if (!validationResult.success) {
+      const errorMessage = validationResult.error.errors[0]?.message || "Dados inválidos"
+      return NextResponse.json(genericError(errorMessage), { status: 400 })
+    }
+
+    const { email, password } = validationResult.data
 
     secureLog("info", "Tentativa de login")
-
-    if (!email || !password) {
-      return NextResponse.json(genericError("Email e senha são obrigatórios"), { status: 400 })
-    }
-
-    if (!isValidEmail(email)) {
-      return NextResponse.json(genericError("Email inválido"), { status: 400 })
-    }
-
-    if (typeof password !== "string" || password.length < 3) {
-      return NextResponse.json(genericError("Senha inválida"), { status: 400 })
-    }
 
     const supabase = await getSupabaseServerClient()
 

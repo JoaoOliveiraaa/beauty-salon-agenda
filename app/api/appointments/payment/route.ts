@@ -1,7 +1,8 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { getSupabaseServerClient } from "@/lib/supabase-server"
 import { getSession } from "@/lib/auth"
-import { secureLog, isValidUUID, genericError } from "@/lib/security"
+import { secureLog, genericError } from "@/lib/security"
+import { updatePaymentSchema } from "@/lib/schemas"
 
 export async function PATCH(request: NextRequest) {
   try {
@@ -11,16 +12,16 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json(genericError("Não autorizado"), { status: 401 })
     }
 
-    const { appointmentId, pago } = await request.json()
+    const body = await request.json()
 
-    // Validação de entrada
-    if (!appointmentId || !isValidUUID(appointmentId)) {
-      return NextResponse.json(genericError("ID do agendamento inválido"), { status: 400 })
+    // Validação com Zod
+    const validationResult = updatePaymentSchema.safeParse(body)
+    if (!validationResult.success) {
+      const errorMessage = validationResult.error.errors[0]?.message || "Dados inválidos"
+      return NextResponse.json(genericError(errorMessage), { status: 400 })
     }
 
-    if (typeof pago !== "boolean") {
-      return NextResponse.json(genericError("Valor de pagamento inválido"), { status: 400 })
-    }
+    const { appointmentId, pago } = validationResult.data
 
     const supabase = await getSupabaseServerClient()
 

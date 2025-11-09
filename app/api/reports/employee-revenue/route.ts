@@ -71,11 +71,11 @@ export async function GET(request: Request) {
         const faturamentoRealizado =
           appointments
             ?.filter((a) => a.status === "concluido" && a.pago)
-            .reduce((sum, a) => sum + (a.servicos?.preco || 0), 0) || 0
+            .reduce((sum, a) => sum + ((a.servicos as any)?.preco || 0), 0) || 0
         const faturamentoPendente =
           appointments
             ?.filter((a) => (a.status === "concluido" && !a.pago) || a.status === "confirmado")
-            .reduce((sum, a) => sum + (a.servicos?.preco || 0), 0) || 0
+            .reduce((sum, a) => sum + ((a.servicos as any)?.preco || 0), 0) || 0
         const cancelamentos = appointments?.filter((a) => a.status === "cancelado").length || 0
 
         return {
