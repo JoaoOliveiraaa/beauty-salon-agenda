@@ -1,81 +1,52 @@
-import { timingSafeEqual } from "crypto"
-
-import bcrypt from "bcryptjs"
 import { type NextRequest, NextResponse } from "next/server"
-import { z } from "zod"
-
-import { createSession } from "@/lib/auth"
-import { logger } from "@/lib/logger"
 import { createServerClient } from "@/lib/supabase-server"
-
-const loginSchema = z.object({
-  email: z.string().email("Email inválido"),
-  password: z.string().min(8, "Senha deve ter pelo menos 8 caracteres"),
-})
-
-function isBcryptHash(value: string | null | undefined) {
-  return typeof value === "string" && /^\$2[aby]\$/.test(value)
-}
-
-function safePlaintextCompare(a: string, b: string) {
-  const aBuffer = Buffer.from(a)
-  const bBuffer = Buffer.from(b)
-  if (aBuffer.length !== bBuffer.length) {
-    return false
-  }
-  return timingSafeEqual(aBuffer, bBuffer)
-}
+import { createSession } from "@/lib/auth"
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json()
-    const parsed = loginSchema.safeParse(body)
+    const { email, password } = await request.json()
 
-    if (!parsed.success) {
-      return NextResponse.json({ error: "Credenciais inválidas" }, { status: 400 })
+    console.log("[v0] Login attempt for email:", email)
+
+    if (!email || !password) {
+      return NextResponse.json({ error: "Email e senha são obrigatórios" }, { status: 400 })
     }
 
-    const { email, password } = parsed.data
+    const supabase = createServerClient()
 
-    const supabase = await createServerClient()
+    // Get user from database
+    const { data: user, error } = await supabase.from("users").select("*").eq("email", email).single()
 
-    const { data: user, error } = await supabase
-      .from("users")
-      .select("id, nome, email, senha, tipo_usuario")
-      .eq("email", email)
-      .maybeSingle()
+    console.log("[v0] User found:", !!user)
+    console.log("[v0] User data:", user ? { email: user.email, senha_length: user.senha?.length } : null)
 
     if (error || !user) {
+      console.log("[v0] User not found or error:", error)
       return NextResponse.json({ error: "Credenciais inválidas" }, { status: 401 })
     }
 
-    const storedPassword = user.senha ?? ""
+    // Simple plain text password comparison
+    const isValidPassword = password === user.senha
 
-    let isValidPassword = false
-    let shouldRehashPassword = false
-
-    if (isBcryptHash(storedPassword)) {
-      isValidPassword = await bcrypt.compare(password, storedPassword)
-    } else if (storedPassword.length > 0 && safePlaintextCompare(password, storedPassword)) {
-      isValidPassword = true
-      shouldRehashPassword = true
-    }
+    console.log("[v0] Password comparison:", {
+      input: password,
+      stored: user.senha,
+      match: isValidPassword,
+    })
 
     if (!isValidPassword) {
       return NextResponse.json({ error: "Credenciais inválidas" }, { status: 401 })
     }
 
-    if (shouldRehashPassword) {
-      const newHash = await bcrypt.hash(password, 12)
-      await supabase.from("users").update({ senha: newHash }).eq("id", user.id)
-    }
-
+    // Create session
     await createSession({
       id: user.id,
       nome: user.nome,
       email: user.email,
       tipo_usuario: user.tipo_usuario,
     })
+
+    console.log("[v0] Session created successfully")
 
     return NextResponse.json({
       success: true,
@@ -87,8 +58,7 @@ export async function POST(request: NextRequest) {
       },
     })
   } catch (error) {
-    logger.error("auth.login.unexpected_error", { error })
+    console.error("[v0] Login error:", error)
     return NextResponse.json({ error: "Erro ao fazer login" }, { status: 500 })
   }
 }
-

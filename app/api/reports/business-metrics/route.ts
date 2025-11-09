@@ -1,17 +1,21 @@
 import { NextResponse } from "next/server"
 import { createSupabaseAdminClient } from "@/lib/supabase-server"
 import { getSession } from "@/lib/auth"
-import { logger } from "@/lib/logger"
 
 export async function GET() {
   try {
+    console.log("[v0] Business metrics API called")
+
     const session = await getSession()
+    console.log("[v0] Session:", session ? `${session.email} (${session.tipo_usuario})` : "none")
+
     if (!session || session.tipo_usuario !== "admin") {
-      logger.warn("reports.business-metrics.permission_denied", { userId: session?.id })
+      console.log("[v0] Permission denied")
       return NextResponse.json({ error: "Sem permissão" }, { status: 403 })
     }
 
     const supabase = createSupabaseAdminClient()
+    console.log("[v0] Fetching business metrics from database...")
 
     // Get date 30 days ago
     const thirtyDaysAgo = new Date()
@@ -31,7 +35,7 @@ export async function GET() {
       .gte("data_agendamento", dateFilter)
 
     if (completedError) {
-      logger.error("reports.business-metrics.completed_fetch_error", { error: completedError })
+      console.error("[v0] Error fetching completed appointments:", completedError.message)
       return NextResponse.json({ error: completedError.message }, { status: 500 })
     }
 
@@ -43,7 +47,7 @@ export async function GET() {
       .gte("data_agendamento", dateFilter)
 
     if (cancelledError) {
-      logger.error("reports.business-metrics.cancelled_fetch_error", { error: cancelledError })
+      console.error("[v0] Error fetching cancelled appointments:", cancelledError.message)
       return NextResponse.json({ error: cancelledError.message }, { status: 500 })
     }
 
@@ -54,7 +58,7 @@ export async function GET() {
       .gte("data_agendamento", dateFilter)
 
     if (allError) {
-      logger.error("reports.business-metrics.total_fetch_error", { error: allError })
+      console.error("[v0] Error fetching all appointments:", allError.message)
       return NextResponse.json({ error: allError.message }, { status: 500 })
     }
 
@@ -78,7 +82,7 @@ export async function GET() {
       .gte("data_agendamento", dateFilter)
 
     if (hoursError) {
-      logger.error("reports.business-metrics.hours_fetch_error", { error: hoursError })
+      console.error("[v0] Error fetching hours:", hoursError.message)
     }
 
     const hourCounts: Record<number, number> = {}
@@ -100,7 +104,7 @@ export async function GET() {
       .gte("data_agendamento", dateFilter)
 
     if (daysError) {
-      logger.error("reports.business-metrics.days_fetch_error", { error: daysError })
+      console.error("[v0] Error fetching days:", daysError.message)
     }
 
     const dayCounts: Record<number, number> = {}
@@ -126,14 +130,10 @@ export async function GET() {
       peakDays,
     }
 
-    logger.info("reports.business-metrics.success", {
-      clientesAtendidos: uniqueClients,
-      totalAtendimentos,
-      totalCancelamentos,
-    })
+    console.log("[v0] Returning response:", response)
     return NextResponse.json(response)
   } catch (error) {
-    logger.error("reports.business-metrics.unexpected_error", { error })
+    console.error("[v0] Error fetching business metrics:", error)
     return NextResponse.json({ error: "Erro interno do servidor" }, { status: 500 })
   }
 }

@@ -1,54 +1,43 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { z } from "zod"
-
-import { getSession } from "@/lib/auth"
-import { logger } from "@/lib/logger"
 import { getSupabaseServerClient } from "@/lib/supabase-server"
-
-const paymentSchema = z.object({
-  appointmentId: z.string().uuid("ID do agendamento inválido"),
-  pago: z.boolean(),
-})
+import { getSession } from "@/lib/auth"
 
 export async function PATCH(request: NextRequest) {
   try {
+    console.log("[v0] Payment update request received")
+
     const session = await getSession()
     if (!session) {
+      console.log("[v0] No session found")
       return NextResponse.json({ error: "Não autorizado" }, { status: 401 })
     }
 
-    if (session.tipo_usuario !== "admin") {
-      return NextResponse.json({ error: "Sem permissão" }, { status: 403 })
-    }
+    const { appointmentId, pago } = await request.json()
+    console.log("[v0] Updating payment status:", { appointmentId, pago })
 
-    const body = await request.json()
-    const parsed = paymentSchema.safeParse(body)
-
-    if (!parsed.success) {
+    if (!appointmentId || typeof pago !== "boolean") {
       return NextResponse.json({ error: "Dados inválidos" }, { status: 400 })
     }
 
     const supabase = await getSupabaseServerClient()
 
+    // Update payment status
     const { data, error } = await supabase
       .from("agendamentos")
-      .update({ pago: parsed.data.pago })
-      .eq("id", parsed.data.appointmentId)
+      .update({ pago })
+      .eq("id", appointmentId)
       .select()
       .single()
 
     if (error) {
-      logger.error("appointments.payment.database_error", {
-        error,
-        appointmentId: parsed.data.appointmentId,
-      })
-      return NextResponse.json({ error: "Erro ao atualizar pagamento" }, { status: 500 })
+      console.error("[v0] Error updating payment:", error)
+      return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
+    console.log("[v0] Payment status updated successfully")
     return NextResponse.json({ success: true, data })
   } catch (error) {
-    logger.error("appointments.payment.unexpected_error", { error })
+    console.error("[v0] Error in payment update:", error)
     return NextResponse.json({ error: "Erro ao atualizar pagamento" }, { status: 500 })
   }
 }
-
