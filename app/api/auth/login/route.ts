@@ -1,41 +1,66 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { createServerClient } from "@/lib/supabase-server"
+import { getSupabaseServerClient } from "@/lib/supabase-server"
 import { createSession } from "@/lib/auth"
+import bcrypt from "bcryptjs"
+import { secureLog, checkRateLimit, getClientIp, genericError } from "@/lib/security"
+import { loginSchema } from "@/lib/schemas"
 
 export async function POST(request: NextRequest) {
   try {
-    const { email, password } = await request.json()
-
-    console.log("[v0] Login attempt for email:", email)
-
-    if (!email || !password) {
-      return NextResponse.json({ error: "Email e senha são obrigatórios" }, { status: 400 })
+    const clientIp = getClientIp(request)
+    
+    // Rate limiting: máximo 5 tentativas de login por minuto por IP
+    if (!checkRateLimit(`login:${clientIp}`, 5, 60000)) {
+      secureLog("warn", "Rate limit de login excedido", { ip: clientIp })
+      return NextResponse.json(
+        genericError("Muitas tentativas de login. Tente novamente em 1 minuto."), 
+        { status: 429 }
+      )
     }
 
-    const supabase = createServerClient()
+    const body = await request.json()
+    
+    // Validação com Zod
+    const validationResult = loginSchema.safeParse(body)
+    if (!validationResult.success) {
+      const errorMessage = validationResult.error.errors[0]?.message || "Dados inválidos"
+      return NextResponse.json(genericError(errorMessage), { status: 400 })
+    }
 
-    // Get user from database
-    const { data: user, error } = await supabase.from("users").select("*").eq("email", email).single()
+    const { email, password } = validationResult.data
 
-    console.log("[v0] User found:", !!user)
-    console.log("[v0] User data:", user ? { email: user.email, senha_length: user.senha?.length } : null)
+    secureLog("info", "Tentativa de login")
+
+    const supabase = await getSupabaseServerClient()
+
+    // Get user from database - apenas campos necessários
+    const { data: user, error } = await supabase
+      .from("users")
+      .select("id, nome, email, senha, tipo_usuario")
+      .eq("email", email)
+      .single()
 
     if (error || !user) {
-      console.log("[v0] User not found or error:", error)
-      return NextResponse.json({ error: "Credenciais inválidas" }, { status: 401 })
+      secureLog("info", "Usuário não encontrado")
+      // Usar mensagem genérica para não expor se o email existe
+      return NextResponse.json(genericError("Credenciais inválidas"), { status: 401 })
     }
 
-    // Simple plain text password comparison
-    const isValidPassword = password === user.senha
+    // Check if password is bcrypt hash or plain text
+    const isBcryptHash = user.senha?.startsWith("$2a$") || user.senha?.startsWith("$2b$")
+    let isValidPassword = false
 
-    console.log("[v0] Password comparison:", {
-      input: password,
-      stored: user.senha,
-      match: isValidPassword,
-    })
+    if (isBcryptHash) {
+      // Use bcrypt comparison for hashed passwords
+      isValidPassword = await bcrypt.compare(password, user.senha)
+    } else {
+      // Fallback to plain text comparison (não recomendado em produção)
+      isValidPassword = password === user.senha
+    }
 
     if (!isValidPassword) {
-      return NextResponse.json({ error: "Credenciais inválidas" }, { status: 401 })
+      secureLog("info", "Senha inválida")
+      return NextResponse.json(genericError("Credenciais inválidas"), { status: 401 })
     }
 
     // Create session
@@ -46,7 +71,7 @@ export async function POST(request: NextRequest) {
       tipo_usuario: user.tipo_usuario,
     })
 
-    console.log("[v0] Session created successfully")
+    secureLog("info", "Login realizado com sucesso")
 
     return NextResponse.json({
       success: true,
@@ -58,7 +83,7 @@ export async function POST(request: NextRequest) {
       },
     })
   } catch (error) {
-    console.error("[v0] Login error:", error)
-    return NextResponse.json({ error: "Erro ao fazer login" }, { status: 500 })
+    secureLog("error", "Erro no login", error)
+    return NextResponse.json(genericError("Erro ao fazer login"), { status: 500 })
   }
 }

@@ -1,19 +1,24 @@
 import { NextResponse } from "next/server"
-import { createSupabaseAdminClient } from "@/lib/supabase-server"
+import { getSupabaseServerClient } from "@/lib/supabase-server"
 import { getSession } from "@/lib/auth"
+import { secureLog, genericError } from "@/lib/security"
 
 export async function GET(request: Request) {
   try {
-    console.log("[v0] Service performance API called")
-
     const session = await getSession()
     if (!session || session.tipo_usuario !== "admin") {
-      console.log("[v0] Permission denied")
-      return NextResponse.json({ error: "Sem permissão" }, { status: 403 })
+      secureLog("warn", "Tentativa de acesso não autorizado a desempenho de serviços")
+      return NextResponse.json(genericError("Sem permissão"), { status: 403 })
     }
 
     const { searchParams } = new URL(request.url)
     const period = searchParams.get("period") || "month"
+
+    // Validar período
+    const validPeriods = ["week", "month", "all"]
+    if (!validPeriods.includes(period)) {
+      return NextResponse.json(genericError("Período inválido"), { status: 400 })
+    }
 
     let daysAgo = 30
     if (period === "week") daysAgo = 7
@@ -23,13 +28,13 @@ export async function GET(request: Request) {
     dateFilter.setDate(dateFilter.getDate() - daysAgo)
     const dateString = dateFilter.toISOString().split("T")[0]
 
-    const supabase = createSupabaseAdminClient()
+    const supabase = await getSupabaseServerClient()
 
     const { data: services, error: servError } = await supabase.from("servicos").select("id, nome_servico, preco")
 
     if (servError) {
-      console.error("[v0] Error fetching services:", servError.message)
-      return NextResponse.json({ error: servError.message }, { status: 500 })
+      secureLog("error", "Erro ao buscar serviços", servError)
+      return NextResponse.json(genericError("Erro ao buscar desempenho"), { status: 500 })
     }
 
     // Get appointments for each service
@@ -42,7 +47,7 @@ export async function GET(request: Request) {
           .gte("data_agendamento", dateString)
 
         if (aptError) {
-          console.error(`[v0] Error fetching appointments for ${service.nome_servico}:`, aptError.message)
+          secureLog("error", "Erro ao buscar agendamentos do serviço", aptError)
           return {
             id: service.id,
             nome_servico: service.nome_servico,
@@ -74,10 +79,10 @@ export async function GET(request: Request) {
 
     const sortedPerformance = servicePerformance.sort((a, b) => b.receita_total - a.receita_total)
 
-    console.log("[v0] Service performance fetched:", sortedPerformance.length, "services")
+    secureLog("info", "Desempenho de serviços obtido com sucesso")
     return NextResponse.json(sortedPerformance)
   } catch (error) {
-    console.error("[v0] Error fetching service performance:", error)
-    return NextResponse.json({ error: "Erro interno do servidor" }, { status: 500 })
+    secureLog("error", "Erro ao buscar desempenho de serviços", error)
+    return NextResponse.json(genericError("Erro interno do servidor"), { status: 500 })
   }
 }

@@ -1,44 +1,66 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { createSupabaseAdminClient } from "@/lib/supabase-server"
-import { cookies } from "next/headers"
+import { getSupabaseServerClient } from "@/lib/supabase-server"
+import { getSession } from "@/lib/auth"
+import { secureLog, isValidUUID, genericError } from "@/lib/security"
 
 export async function POST(request: NextRequest) {
   try {
-    console.log("[v0] Employee services API called")
+    const session = await getSession()
 
-    const cookieStore = await cookies()
-    const sessionCookie = cookieStore.get("session")
-
-    if (!sessionCookie) {
-      console.log("[v0] No session cookie found")
-      return NextResponse.json({ error: "Não autenticado" }, { status: 401 })
+    if (!session) {
+      secureLog("warn", "Tentativa de atualizar serviços sem autenticação")
+      return NextResponse.json(genericError("Não autenticado"), { status: 401 })
     }
 
-    const session = JSON.parse(sessionCookie.value)
-    console.log("[v0] Session data:", { email: session.email, tipo_usuario: session.tipo_usuario })
-
     if (session.tipo_usuario !== "admin") {
-      console.log("[v0] User is not admin, denying access")
-      return NextResponse.json({ error: "Sem permissão" }, { status: 403 })
+      secureLog("warn", "Usuário não-admin tentou atualizar serviços de funcionário")
+      return NextResponse.json(genericError("Sem permissão"), { status: 403 })
     }
 
     const { employeeId, serviceIds } = await request.json()
-    console.log("[v0] Request data:", { employeeId, serviceIdsCount: serviceIds?.length })
 
-    if (!employeeId || !Array.isArray(serviceIds)) {
-      console.log("[v0] Invalid request data")
-      return NextResponse.json({ error: "Dados inválidos" }, { status: 400 })
+    // Validação de entrada
+    if (!employeeId || !isValidUUID(employeeId)) {
+      return NextResponse.json(genericError("ID do funcionário inválido"), { status: 400 })
     }
 
-    const supabase = createSupabaseAdminClient()
+    if (!Array.isArray(serviceIds)) {
+      return NextResponse.json(genericError("Lista de serviços inválida"), { status: 400 })
+    }
+
+    // Validar todos os IDs de serviço
+    if (serviceIds.length > 0) {
+      const allValid = serviceIds.every((id) => typeof id === "string" && isValidUUID(id))
+      if (!allValid) {
+        return NextResponse.json(genericError("IDs de serviço inválidos"), { status: 400 })
+      }
+
+      // Limitar número de serviços por funcionário
+      if (serviceIds.length > 50) {
+        return NextResponse.json(genericError("Muitos serviços selecionados"), { status: 400 })
+      }
+    }
+
+    const supabase = await getSupabaseServerClient()
+
+    // Verificar se o funcionário existe
+    const { data: employee } = await supabase
+      .from("users")
+      .select("id")
+      .eq("id", employeeId)
+      .eq("tipo_usuario", "funcionario")
+      .single()
+
+    if (!employee) {
+      return NextResponse.json(genericError("Funcionário não encontrado"), { status: 404 })
+    }
 
     // Delete existing associations
-    console.log("[v0] Deleting existing services for employee:", employeeId)
     const { error: deleteError } = await supabase.from("funcionario_servicos").delete().eq("funcionario_id", employeeId)
 
     if (deleteError) {
-      console.error("[v0] Error deleting employee services:", deleteError)
-      throw deleteError
+      secureLog("error", "Erro ao deletar serviços do funcionário", deleteError)
+      return NextResponse.json(genericError("Erro ao atualizar serviços"), { status: 500 })
     }
 
     // Insert new associations
@@ -48,20 +70,18 @@ export async function POST(request: NextRequest) {
         servico_id: serviceId,
       }))
 
-      console.log("[v0] Inserting new services:", insertData)
       const { error: insertError } = await supabase.from("funcionario_servicos").insert(insertData)
 
       if (insertError) {
-        console.error("[v0] Error inserting employee services:", insertError)
-        throw insertError
+        secureLog("error", "Erro ao inserir serviços do funcionário", insertError)
+        return NextResponse.json(genericError("Erro ao atualizar serviços"), { status: 500 })
       }
     }
 
-    console.log("[v0] Employee services updated successfully:", { employeeId, serviceCount: serviceIds.length })
-
+    secureLog("info", "Serviços do funcionário atualizados com sucesso")
     return NextResponse.json({ success: true })
   } catch (error) {
-    console.error("[v0] Error in employee-services API:", error)
-    return NextResponse.json({ error: "Erro ao atualizar serviços" }, { status: 500 })
+    secureLog("error", "Erro na API employee-services", error)
+    return NextResponse.json(genericError("Erro ao atualizar serviços"), { status: 500 })
   }
 }

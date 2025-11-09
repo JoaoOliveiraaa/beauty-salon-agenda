@@ -1,21 +1,18 @@
 import { NextResponse } from "next/server"
-import { createSupabaseAdminClient } from "@/lib/supabase-server"
+import { getSupabaseServerClient } from "@/lib/supabase-server"
 import { getSession } from "@/lib/auth"
+import { secureLog, genericError } from "@/lib/security"
 
 export async function GET() {
   try {
-    console.log("[v0] Business metrics API called")
-
     const session = await getSession()
-    console.log("[v0] Session:", session ? `${session.email} (${session.tipo_usuario})` : "none")
 
     if (!session || session.tipo_usuario !== "admin") {
-      console.log("[v0] Permission denied")
-      return NextResponse.json({ error: "Sem permissão" }, { status: 403 })
+      secureLog("warn", "Tentativa de acesso não autorizado a métricas")
+      return NextResponse.json(genericError("Sem permissão"), { status: 403 })
     }
 
-    const supabase = createSupabaseAdminClient()
-    console.log("[v0] Fetching business metrics from database...")
+    const supabase = await getSupabaseServerClient()
 
     // Get date 30 days ago
     const thirtyDaysAgo = new Date()
@@ -35,8 +32,8 @@ export async function GET() {
       .gte("data_agendamento", dateFilter)
 
     if (completedError) {
-      console.error("[v0] Error fetching completed appointments:", completedError.message)
-      return NextResponse.json({ error: completedError.message }, { status: 500 })
+      secureLog("error", "Erro ao buscar agendamentos concluídos", completedError)
+      return NextResponse.json(genericError("Erro ao buscar métricas"), { status: 500 })
     }
 
     // Get cancelled appointments
@@ -47,8 +44,8 @@ export async function GET() {
       .gte("data_agendamento", dateFilter)
 
     if (cancelledError) {
-      console.error("[v0] Error fetching cancelled appointments:", cancelledError.message)
-      return NextResponse.json({ error: cancelledError.message }, { status: 500 })
+      secureLog("error", "Erro ao buscar agendamentos cancelados", cancelledError)
+      return NextResponse.json(genericError("Erro ao buscar métricas"), { status: 500 })
     }
 
     // Get all appointments for cancellation rate
@@ -58,8 +55,8 @@ export async function GET() {
       .gte("data_agendamento", dateFilter)
 
     if (allError) {
-      console.error("[v0] Error fetching all appointments:", allError.message)
-      return NextResponse.json({ error: allError.message }, { status: 500 })
+      secureLog("error", "Erro ao buscar todos os agendamentos", allError)
+      return NextResponse.json(genericError("Erro ao buscar métricas"), { status: 500 })
     }
 
     // Calculate metrics
@@ -82,7 +79,7 @@ export async function GET() {
       .gte("data_agendamento", dateFilter)
 
     if (hoursError) {
-      console.error("[v0] Error fetching hours:", hoursError.message)
+      secureLog("error", "Erro ao buscar horários de pico", hoursError)
     }
 
     const hourCounts: Record<number, number> = {}
@@ -104,7 +101,7 @@ export async function GET() {
       .gte("data_agendamento", dateFilter)
 
     if (daysError) {
-      console.error("[v0] Error fetching days:", daysError.message)
+      secureLog("error", "Erro ao buscar dias de pico", daysError)
     }
 
     const dayCounts: Record<number, number> = {}
@@ -130,10 +127,10 @@ export async function GET() {
       peakDays,
     }
 
-    console.log("[v0] Returning response:", response)
+    secureLog("info", "Métricas de negócio obtidas com sucesso")
     return NextResponse.json(response)
   } catch (error) {
-    console.error("[v0] Error fetching business metrics:", error)
-    return NextResponse.json({ error: "Erro interno do servidor" }, { status: 500 })
+    secureLog("error", "Erro ao buscar métricas de negócio", error)
+    return NextResponse.json(genericError("Erro interno do servidor"), { status: 500 })
   }
 }
